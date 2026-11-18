@@ -22,6 +22,15 @@ function buildApp(databaseAvailable: boolean) {
     healthRepository,
     loginRateLimitMax: 5,
     logger: pino({ enabled: false }),
+    restaurantService: {
+      get: () => Promise.reject(new Error("Not used by health tests")),
+      update: () => Promise.reject(new Error("Not used by health tests")),
+    },
+    staffService: {
+      list: () => Promise.reject(new Error("Not used by health tests")),
+      create: () => Promise.reject(new Error("Not used by health tests")),
+      update: () => Promise.reject(new Error("Not used by health tests")),
+    },
   });
 }
 

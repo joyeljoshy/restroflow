@@ -7,9 +7,9 @@ export default function AdminPage() {
       description="Restaurant health, team access, and analytics will come together here as their domain features are implemented."
       metrics={[
         {
-          label: "Active staff",
-          value: "—",
-          note: "Staff management is not implemented",
+          label: "Team access",
+          value: "Ready",
+          note: "Profiles, roles, and account status",
         },
         {
           label: "Open orders",

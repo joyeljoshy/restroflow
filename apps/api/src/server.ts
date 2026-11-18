@@ -10,6 +10,10 @@ import {
   AuthService,
 } from "./modules/auth/auth.service.js";
 import { PrismaHealthRepository } from "./modules/health/health.repository.js";
+import { PrismaRestaurantRepository } from "./modules/restaurants/restaurant.repository.js";
+import { RestaurantService } from "./modules/restaurants/restaurant.service.js";
+import { PrismaStaffRepository } from "./modules/staff/staff.repository.js";
+import { StaffService } from "./modules/staff/staff.service.js";
 
 const env = loadEnvironment();
 const logger = createLogger(env.LOG_LEVEL);
@@ -20,6 +24,7 @@ const authService = new AuthService(
   new Argon2PasswordHasher(),
   sessionTtlMs,
 );
+const passwordHasher = new Argon2PasswordHasher();
 const app = createApp({
   allowedOrigins: env.CORS_ORIGINS,
   authService,
@@ -30,6 +35,13 @@ const app = createApp({
   healthRepository: new PrismaHealthRepository(prisma),
   loginRateLimitMax: env.LOGIN_RATE_LIMIT_MAX,
   logger,
+  restaurantService: new RestaurantService(
+    new PrismaRestaurantRepository(prisma),
+  ),
+  staffService: new StaffService(
+    new PrismaStaffRepository(prisma),
+    passwordHasher,
+  ),
 });
 
 const server = app.listen(env.PORT, () => {

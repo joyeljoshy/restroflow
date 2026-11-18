@@ -215,7 +215,7 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-5 py-8 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <Logo />
           <p className="text-muted-foreground">
-            Parts 1–2 · Foundation and staff access
+            Parts 1–3 · Foundation, staff access, and restaurant management
           </p>
         </div>
       </footer>

@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 and 2 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, and role-based restaurant access. Restaurant business workflows are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 3 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, and staff account management. Menu, table, order, billing, and analytics workflows are intentionally not implemented yet.
 
 ## Architecture
 
@@ -119,7 +119,7 @@ npx playwright install chromium
 4. Regenerate the client and run lint, type checking, and tests.
 5. Deploy with `npm run db:migrate:deploy`; never use `db push` for production changes.
 
-The committed authentication migration defines the minimal restaurant identity needed to scope staff memberships. It does not provide restaurant-management workflows.
+The committed migrations define secure staff identity and the restaurant profile, contact, locale, currency, and integer-basis-point tax settings used by Part 3.
 
 ## Staff authentication
 
@@ -134,6 +134,12 @@ Authorization is enforced by Express in this order:
 3. `requireRole` checks the role on the verified membership.
 
 Client-provided role or restaurant values never establish permission. Customers are not staff users and will use a separate public ordering flow.
+
+## Restaurant and staff management
+
+Admins can manage restaurant settings at `/admin/settings` and staff accounts at `/admin/staff`. Managers have read-only access to these views. The API scopes every operation through the authenticated restaurant membership; only admins can update settings or create, edit, activate, deactivate, and change staff roles.
+
+Deactivating a staff membership or changing its role revokes that user's active sessions. The last active admin cannot be demoted or deactivated. Tax rates are stored as integer basis points, and account responses never include password hashes or session tokens.
 
 Login attempts are rate-limited per source address. All login inputs use the shared Zod contract, and failures return the same invalid-credentials response to avoid account disclosure.
 
@@ -164,7 +170,7 @@ npm test
 npm run build
 ```
 
-For a manual smoke test, open the landing, login, `/admin`, `/kitchen`, and `/waiter` routes. Confirm the layouts work at mobile and desktop widths, then call the health endpoint and verify `checks.database` is `up`.
+For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Confirm the deactivated account cannot reuse an existing session, verify a sole active admin cannot be demoted or deactivated, and check the layouts at mobile and desktop widths. Finally call the health endpoint and verify `checks.database` is `up`.
 
 ## Stopping local services
 

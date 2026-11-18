@@ -14,6 +14,10 @@ import type { AuthServiceContract } from "./modules/auth/auth.service.js";
 import { HealthController } from "./modules/health/health.controller.js";
 import type { HealthRepository } from "./modules/health/health.repository.js";
 import { HealthService } from "./modules/health/health.service.js";
+import { RestaurantController } from "./modules/restaurants/restaurant.controller.js";
+import type { RestaurantServiceContract } from "./modules/restaurants/restaurant.service.js";
+import { StaffController } from "./modules/staff/staff.controller.js";
+import type { StaffServiceContract } from "./modules/staff/staff.service.js";
 import { createV1Router } from "./routes/v1.js";
 
 type AppOptions = {
@@ -23,6 +27,8 @@ type AppOptions = {
   healthRepository: HealthRepository;
   loginRateLimitMax: number;
   logger: Logger;
+  restaurantService: RestaurantServiceContract;
+  staffService: StaffServiceContract;
   version?: string;
 };
 
@@ -37,6 +43,10 @@ export function createApp(options: AppOptions) {
     options.authService,
     options.cookieOptions,
   );
+  const restaurantController = new RestaurantController(
+    options.restaurantService,
+  );
+  const staffController = new StaffController(options.staffService);
 
   app.disable("x-powered-by");
   app.use(helmet());
@@ -74,6 +84,8 @@ export function createApp(options: AppOptions) {
       options.authService,
       options.cookieOptions,
       options.loginRateLimitMax,
+      restaurantController,
+      staffController,
     ),
   );
   app.use(notFoundHandler);

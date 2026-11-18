@@ -6,6 +6,9 @@ import { createAuthRouter } from "../modules/auth/auth.routes.js";
 import type { AuthServiceContract } from "../modules/auth/auth.service.js";
 import type { HealthController } from "../modules/health/health.controller.js";
 import { createHealthRouter } from "../modules/health/health.routes.js";
+import type { RestaurantController } from "../modules/restaurants/restaurant.controller.js";
+import { createRestaurantRouter } from "../modules/restaurants/restaurant.routes.js";
+import type { StaffController } from "../modules/staff/staff.controller.js";
 
 export function createV1Router(
   healthController: HealthController,
@@ -13,6 +16,8 @@ export function createV1Router(
   authService: AuthServiceContract,
   cookieOptions: SessionCookieOptions,
   loginRateLimitMax: number,
+  restaurantController: RestaurantController,
+  staffController: StaffController,
 ): Router {
   const router = Router();
   router.use(
@@ -25,5 +30,14 @@ export function createV1Router(
     ),
   );
   router.use("/health", createHealthRouter(healthController));
+  router.use(
+    "/restaurants",
+    createRestaurantRouter(
+      restaurantController,
+      staffController,
+      authService,
+      cookieOptions,
+    ),
+  );
   return router;
 }

@@ -114,6 +114,15 @@ function createAuthApp(
     healthRepository: { isDatabaseAvailable: () => Promise.resolve(true) },
     loginRateLimitMax,
     logger: pino({ enabled: false }),
+    restaurantService: {
+      get: () => Promise.reject(new Error("Not used by auth tests")),
+      update: () => Promise.reject(new Error("Not used by auth tests")),
+    },
+    staffService: {
+      list: () => Promise.reject(new Error("Not used by auth tests")),
+      create: () => Promise.reject(new Error("Not used by auth tests")),
+      update: () => Promise.reject(new Error("Not used by auth tests")),
+    },
   });
 }
 

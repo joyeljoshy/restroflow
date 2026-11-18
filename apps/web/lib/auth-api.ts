@@ -19,7 +19,7 @@ export class ApiError extends Error {
   }
 }
 
-async function apiError(response: Response): Promise<ApiError> {
+export async function apiError(response: Response): Promise<ApiError> {
   const body: unknown = await response.json().catch(() => undefined);
   const parsed = errorResponseSchema.safeParse(body);
   return new ApiError(

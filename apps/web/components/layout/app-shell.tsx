@@ -28,9 +28,9 @@ const roleConfig = {
     label: "Admin",
     items: [
       ["Overview", "/admin", LayoutDashboard],
-      ["Team", "/admin#team", Users],
+      ["Team", "/admin/staff", Users],
       ["Analytics", "/admin#analytics", BarChart3],
-      ["Settings", "/admin#settings", Settings],
+      ["Settings", "/admin/settings", Settings],
     ],
   },
   kitchen: {
@@ -101,7 +101,9 @@ export function AppShell({
           aria-label={`${config.label} workspace navigation`}
         >
           {config.items.map(([label, href, Icon]) => {
-            const active = pathname === href;
+            const active =
+              pathname === href ||
+              (href !== "/admin" && pathname.startsWith(`${href}/`));
             return (
               <Link
                 key={label}
