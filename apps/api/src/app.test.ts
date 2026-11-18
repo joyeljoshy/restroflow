@@ -3,15 +3,24 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 
 import { createApp } from "./app.js";
+import type { AuthServiceContract } from "./modules/auth/auth.service.js";
 import type { HealthRepository } from "./modules/health/health.repository.js";
 
 function buildApp(databaseAvailable: boolean) {
   const healthRepository: HealthRepository = {
     isDatabaseAvailable: () => Promise.resolve(databaseAvailable),
   };
+  const authService: AuthServiceContract = {
+    login: () => Promise.reject(new Error("Not used by health tests")),
+    authenticate: () => Promise.reject(new Error("Not used by health tests")),
+    logout: () => Promise.resolve(),
+  };
   return createApp({
     allowedOrigins: ["http://localhost:3000"],
+    authService,
+    cookieOptions: { secure: false, maxAgeMs: 60_000 },
     healthRepository,
+    loginRateLimitMax: 5,
     logger: pino({ enabled: false }),
   });
 }

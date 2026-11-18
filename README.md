@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Part 1 provides the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, and test tooling. Authentication and restaurant business workflows are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 and 2 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, and role-based restaurant access. Restaurant business workflows are intentionally not implemented yet.
 
 ## Architecture
 
@@ -119,7 +119,40 @@ npx playwright install chromium
 4. Regenerate the client and run lint, type checking, and tests.
 5. Deploy with `npm run db:migrate:deploy`; never use `db push` for production changes.
 
-No initial domain migration exists because Part 1 deliberately defines no restaurant or authentication models.
+The committed authentication migration defines the minimal restaurant identity needed to scope staff memberships. It does not provide restaurant-management workflows.
+
+## Staff authentication
+
+Staff authenticate through `POST /api/v1/auth/login`. The API verifies the password with Argon2id, creates a cryptographically random opaque session token, stores only its SHA-256 hash, and returns the raw token in an HTTP-only, SameSite cookie. Production cookies also use `Secure`.
+
+The browser restores authentication with `GET /api/v1/auth/me`. Protected layouts wait for that authoritative response before rendering. `POST /api/v1/auth/logout` revokes the matching server-side session and clears the cookie. Expired, revoked, inactive-user, and membership-less sessions are rejected and cleared.
+
+Authorization is enforced by Express in this order:
+
+1. `requireAuth` loads the user and active memberships from the server-side session.
+2. `requireRestaurantAccess` matches the route restaurant to those memberships.
+3. `requireRole` checks the role on the verified membership.
+
+Client-provided role or restaurant values never establish permission. Customers are not staff users and will use a separate public ordering flow.
+
+Login attempts are rate-limited per source address. All login inputs use the shared Zod contract, and failures return the same invalid-credentials response to avoid account disclosure.
+
+### Create the first development admin
+
+The seed remains a read-only connectivity check unless every `ADMIN_SEED_*` variable is supplied. Admin creation is refused when `NODE_ENV=production`.
+
+PowerShell example:
+
+```powershell
+$env:ADMIN_SEED_EMAIL = "admin@example.com"
+$env:ADMIN_SEED_PASSWORD = "use-a-long-local-password"
+$env:ADMIN_SEED_NAME = "Local Admin"
+$env:ADMIN_SEED_RESTAURANT_SLUG = "local-restaurant"
+$env:ADMIN_SEED_RESTAURANT_NAME = "Local Restaurant"
+npm run db:seed
+```
+
+The operation is transactional and repeatable. Re-running it intentionally refreshes that development user's name, password, active state, and admin membership. Clear the temporary shell variables afterward. Never use this workflow for production account provisioning.
 
 ## Verification
 

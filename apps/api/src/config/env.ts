@@ -18,6 +18,8 @@ const envSchema = z.object({
         .filter(Boolean),
     ),
   DATABASE_URL: z.string().url().startsWith("postgresql://"),
+  SESSION_TTL_HOURS: z.coerce.number().int().positive().max(168).default(12),
+  LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
 });
 
 export type Environment = z.infer<typeof envSchema>;

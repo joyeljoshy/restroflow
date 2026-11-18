@@ -1,29 +1,43 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useState } from "react";
+import { loginRequestSchema, type LoginRequest } from "@restroflow/contracts";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { z } from "zod";
 
+import { homeForRole, useAuth } from "@/components/auth/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const loginSchema = z.object({
-  email: z.email("Enter a valid work email."),
-  password: z.string().min(8, "Use at least 8 characters."),
-});
-type LoginValues = z.infer<typeof loginSchema>;
+import { ApiError } from "@/lib/auth-api";
 
 export function LoginForm() {
-  const [notice, setNotice] = useState<string>();
+  const { user, login, isLoading, isLoggingIn } = useAuth();
+  const router = useRouter();
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors, isSubmitting },
-  } = useForm<LoginValues>({ resolver: zodResolver(loginSchema) });
-  const submit = handleSubmit(() =>
-    setNotice("Authentication is intentionally scheduled for a later part."),
-  );
+  } = useForm<LoginRequest>({ resolver: zodResolver(loginRequestSchema) });
+
+  useEffect(() => {
+    const membership = user?.memberships[0];
+    if (membership) router.replace(homeForRole(membership.role));
+  }, [router, user]);
+
+  const submit = handleSubmit(async (values) => {
+    try {
+      await login(values);
+    } catch (error) {
+      setError("root", {
+        message:
+          error instanceof ApiError
+            ? error.message
+            : "Sign-in failed. Please try again.",
+      });
+    }
+  });
 
   return (
     <form
@@ -73,16 +87,16 @@ export function LoginForm() {
         type="submit"
         className="w-full"
         size="lg"
-        disabled={isSubmitting}
+        disabled={isLoading || isSubmitting || isLoggingIn}
       >
-        Continue
+        {isSubmitting || isLoggingIn ? "Signing in…" : "Continue"}
       </Button>
-      {notice && (
+      {errors.root?.message && (
         <p
-          className="bg-accent text-accent-foreground rounded-lg p-3 text-sm"
-          role="status"
+          className="rounded-lg bg-red-50 p-3 text-sm text-red-800"
+          role="alert"
         >
-          {notice}
+          {errors.root.message}
         </p>
       )}
     </form>

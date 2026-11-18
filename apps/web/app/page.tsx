@@ -169,9 +169,9 @@ export default function HomePage() {
               </h2>
             </div>
             <p className="text-lg leading-8 text-stone-400">
-              The Part 1 foundation establishes a maintainable interface and
-              production-minded architecture. Operational workflows will be
-              added incrementally and verified as later parts are requested.
+              The foundation establishes a maintainable interface,
+              production-minded architecture, and secure role-based staff
+              access. Operational workflows will be added incrementally.
             </p>
           </div>
           <div className="mt-14 grid gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 md:grid-cols-3">
@@ -197,9 +197,10 @@ export default function HomePage() {
               A strong foundation before the first order.
             </h2>
             <p className="text-muted-foreground mt-3 max-w-2xl leading-7">
-              Typed contracts, database readiness, structured errors, accessible
-              UI primitives, and test foundations are in place—without
-              pretending unfinished business features are ready.
+              Typed contracts, database readiness, secure staff sessions,
+              structured errors, accessible UI primitives, and test foundations
+              are in place—without pretending unfinished business features are
+              ready.
             </p>
           </div>
           <Button asChild size="lg">
@@ -214,7 +215,7 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-5 py-8 text-sm sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <Logo />
           <p className="text-muted-foreground">
-            Part 1 · Architecture and interface foundation
+            Parts 1–2 · Foundation and staff access
           </p>
         </div>
       </footer>

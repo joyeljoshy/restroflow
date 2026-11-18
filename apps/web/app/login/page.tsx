@@ -48,11 +48,11 @@ export default function LoginPage() {
             The right view for every role on the floor.
           </h2>
           <p className="mt-5 leading-7 text-stone-400">
-            Admin, kitchen, and waiter shells are ready for the secure workflows
-            introduced in later parts.
+            Secure sessions now connect each staff member to the workspaces
+            allowed by their restaurant role.
           </p>
           <div className="mt-8 flex gap-2">
-            {["Admin", "Kitchen", "Waiter"].map((role) => (
+            {["Admin", "Kitchen", "Waiter", "Cashier"].map((role) => (
               <span
                 key={role}
                 className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold"

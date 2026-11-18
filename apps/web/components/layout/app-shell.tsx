@@ -5,7 +5,9 @@ import {
   Bell,
   ChefHat,
   LayoutDashboard,
+  LogOut,
   Menu,
+  ReceiptText,
   Settings,
   ShoppingBag,
   Users,
@@ -15,6 +17,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { useAuth } from "@/components/auth/auth-provider";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -44,6 +47,13 @@ const roleConfig = {
       ["Orders", "/waiter#orders", ShoppingBag],
     ],
   },
+  cashier: {
+    label: "Cashier",
+    items: [
+      ["Checkout", "/cashier", ReceiptText],
+      ["Payments", "/cashier#payments", ShoppingBag],
+    ],
+  },
 } as const;
 
 export type WorkspaceRole = keyof typeof roleConfig;
@@ -56,8 +66,15 @@ export function AppShell({
   children: ReactNode;
 }) {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
   const { navigationOpen, toggleNavigation, closeNavigation } = useUiStore();
   const config = roleConfig[role];
+  const initials = user?.displayName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
 
   const sidebar = (
     <>
@@ -104,9 +121,9 @@ export function AppShell({
       </div>
       <div className="mt-auto border-t p-4">
         <div className="bg-muted/60 rounded-xl p-3">
-          <p className="text-sm font-semibold">Part 1 foundation</p>
+          <p className="text-sm font-semibold">Secure staff session</p>
           <p className="text-muted-foreground mt-1 text-xs leading-5">
-            Role authorization and live operational data are not enabled yet.
+            Restaurant access and staff roles are enforced by the API.
           </p>
         </div>
       </div>
@@ -158,9 +175,25 @@ export function AppShell({
             >
               <Bell />
             </Button>
+            <div className="hidden text-right sm:block">
+              <p className="max-w-40 truncate text-xs font-bold">
+                {user?.displayName}
+              </p>
+              <p className="text-muted-foreground max-w-40 truncate text-[11px]">
+                {user?.email}
+              </p>
+            </div>
             <span className="bg-primary text-primary-foreground grid size-9 place-items-center rounded-full text-xs font-bold">
-              RF
+              {initials || "RF"}
             </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Sign out"
+              onClick={() => void logout()}
+            >
+              <LogOut />
+            </Button>
           </div>
         </header>
         <main className="p-4 sm:p-7 lg:p-9">{children}</main>

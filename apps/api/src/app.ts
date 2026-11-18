@@ -8,6 +8,9 @@ import type { Logger } from "pino";
 
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFoundHandler } from "./middleware/not-found.js";
+import { AuthController } from "./modules/auth/auth.controller.js";
+import type { SessionCookieOptions } from "./modules/auth/auth.cookies.js";
+import type { AuthServiceContract } from "./modules/auth/auth.service.js";
 import { HealthController } from "./modules/health/health.controller.js";
 import type { HealthRepository } from "./modules/health/health.repository.js";
 import { HealthService } from "./modules/health/health.service.js";
@@ -15,7 +18,10 @@ import { createV1Router } from "./routes/v1.js";
 
 type AppOptions = {
   allowedOrigins: string[];
+  authService: AuthServiceContract;
+  cookieOptions: SessionCookieOptions;
   healthRepository: HealthRepository;
+  loginRateLimitMax: number;
   logger: Logger;
   version?: string;
 };
@@ -27,6 +33,10 @@ export function createApp(options: AppOptions) {
     options.version ?? "0.1.0",
   );
   const healthController = new HealthController(healthService);
+  const authController = new AuthController(
+    options.authService,
+    options.cookieOptions,
+  );
 
   app.disable("x-powered-by");
   app.use(helmet());
@@ -56,7 +66,16 @@ export function createApp(options: AppOptions) {
     }),
   );
 
-  app.use("/api/v1", createV1Router(healthController));
+  app.use(
+    "/api/v1",
+    createV1Router(
+      healthController,
+      authController,
+      options.authService,
+      options.cookieOptions,
+      options.loginRateLimitMax,
+    ),
+  );
   app.use(notFoundHandler);
   app.use(errorHandler);
   return app;
