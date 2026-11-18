@@ -85,6 +85,7 @@ dist
 .playwright/
 playwright-report/
 test-results/
+uploads/
 .output
 
 # NitroJS

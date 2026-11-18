@@ -42,6 +42,34 @@ export const requireRestaurantAccess: RequestHandler = (req, _res, next) => {
   next();
 };
 
+export const resolveSessionRestaurant: RequestHandler = (req, _res, next) => {
+  const requestedId = req.header("x-restaurant-id");
+  const memberships = req.auth.user.memberships;
+  const membership = requestedId
+    ? memberships.find((candidate) => candidate.restaurantId === requestedId)
+    : memberships.length === 1
+      ? memberships[0]
+      : undefined;
+
+  if (!membership) {
+    next(
+      new AppError(
+        requestedId ? 403 : 400,
+        requestedId
+          ? "RESTAURANT_ACCESS_DENIED"
+          : "RESTAURANT_CONTEXT_REQUIRED",
+        requestedId
+          ? "You do not have access to this restaurant."
+          : "Select a restaurant before accessing its menu.",
+      ),
+    );
+    return;
+  }
+
+  req.restaurantAccess = membership;
+  next();
+};
+
 export function requireRole(...roles: Role[]): RequestHandler {
   return (req, _res, next) => {
     if (!req.restaurantAccess || !roles.includes(req.restaurantAccess.role)) {

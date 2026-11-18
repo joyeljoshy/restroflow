@@ -5,8 +5,8 @@ const restaurantId = "9010e67f-4aa1-428e-bc26-6de08366aab2";
 const corsHeaders = {
   "access-control-allow-origin": "http://127.0.0.1:3100",
   "access-control-allow-credentials": "true",
-  "access-control-allow-headers": "content-type",
-  "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
+  "access-control-allow-headers": "content-type,x-restaurant-id",
+  "access-control-allow-methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
 };
 
 async function fulfillJson(route: Route, body: unknown, status = 200) {
@@ -73,6 +73,149 @@ test("admin updates restaurant settings", async ({ page }) => {
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.getByText("Settings saved")).toBeVisible();
   await expect(page.getByLabel("Restaurant name")).toHaveValue("Cafe Aurora");
+});
+
+test("admin creates, edits, and persists a menu item and its availability", async ({
+  page,
+}) => {
+  await mockAdmin(page);
+  const timestamp = "2026-11-18T10:00:00.000Z";
+  const categories: Array<Record<string, unknown>> = [];
+  const items: Array<Record<string, unknown>> = [];
+
+  await page.route(`**/api/v1/restaurants/${restaurantId}`, (route) =>
+    fulfillJson(route, {
+      restaurant: {
+        id: restaurantId,
+        name: "RestroFlow Demo",
+        slug: "restroflow-demo",
+        address: null,
+        phone: null,
+        email: null,
+        timezone: "Asia/Kolkata",
+        currency: "INR",
+        taxName: "GST",
+        taxRateBasisPoints: 0,
+        pricesIncludeTax: false,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    }),
+  );
+  await page.route("**/api/v1/menu/modifier-groups**", (route) =>
+    fulfillJson(route, { groups: [] }),
+  );
+  await page.route("**/api/v1/menu/categories**", async (route) => {
+    if (route.request().method() === "POST") {
+      const input = route.request().postDataJSON() as Record<string, unknown>;
+      const created = {
+        id: "10000000-0000-4000-8000-000000000001",
+        ...input,
+        description: input.description ?? null,
+        isActive: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      categories.push(created);
+      await fulfillJson(route, { category: created }, 201);
+      return;
+    }
+    await fulfillJson(route, { categories });
+  });
+  await page.route("**/api/v1/menu/items**", async (route) => {
+    const method = route.request().method();
+    const url = new URL(route.request().url());
+    const segments = url.pathname.split("/");
+    const itemId = segments[segments.indexOf("items") + 1];
+    if (method === "POST") {
+      const input = route.request().postDataJSON() as Record<string, unknown>;
+      const category = categories.find(
+        (candidate) => candidate.id === input.categoryId,
+      )!;
+      const created = {
+        id: "20000000-0000-4000-8000-000000000001",
+        ...input,
+        description: input.description ?? null,
+        imageUrl: input.imageUrl ?? null,
+        category,
+        modifierGroups: [],
+        isEffectivelyAvailable: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      items.push(created);
+      await fulfillJson(route, { item: created }, 201);
+      return;
+    }
+    if (method === "PUT") {
+      await fulfillJson(route, {
+        item: items.find((candidate) => candidate.id === itemId),
+      });
+      return;
+    }
+    if (method === "PATCH") {
+      const target = items.find((candidate) => candidate.id === itemId)!;
+      Object.assign(target, route.request().postDataJSON());
+      target.isEffectivelyAvailable = Boolean(
+        target.isActive && target.isAvailable,
+      );
+      await fulfillJson(route, { item: target });
+      return;
+    }
+    await fulfillJson(route, {
+      items,
+      pagination: {
+        page: 1,
+        limit: 12,
+        total: items.length,
+        totalPages: items.length ? 1 : 0,
+      },
+    });
+  });
+
+  await page.goto("/admin/menu");
+  await page.getByRole("tab", { name: "categories" }).click();
+  await page.getByRole("button", { name: "Add category" }).click();
+  await page
+    .getByRole("dialog", { name: "Add category" })
+    .getByLabel("Name")
+    .fill("Mains");
+  await page.getByRole("button", { name: "Save category" }).click();
+  await expect(page.getByText("Mains").first()).toBeVisible();
+
+  await page.getByRole("tab", { name: "items" }).click();
+  await page.getByRole("button", { name: "Add item" }).click();
+  const itemDialog = page.getByRole("dialog", { name: "Add menu item" });
+  await itemDialog.getByLabel("Item name").fill("Paneer Bowl");
+  await itemDialog.getByLabel("Price").fill("129.00");
+  await itemDialog
+    .getByLabel("Category")
+    .selectOption("10000000-0000-4000-8000-000000000001");
+  await page.getByRole("button", { name: "Create menu item" }).click();
+  await expect(page.getByText("Paneer Bowl").first()).toBeVisible();
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  await page
+    .getByRole("dialog", { name: "Edit menu item" })
+    .getByLabel("Item name")
+    .fill("Paneer Rice Bowl");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Paneer Rice Bowl").first()).toBeVisible();
+  await page.getByRole("button", { name: "Mark unavailable" }).click();
+  await expect(
+    page
+      .getByRole("article")
+      .filter({ hasText: "Paneer Rice Bowl" })
+      .getByText("Unavailable"),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Paneer Rice Bowl").first()).toBeVisible();
+  await expect(
+    page
+      .getByRole("article")
+      .filter({ hasText: "Paneer Rice Bowl" })
+      .getByText("Unavailable"),
+  ).toBeVisible();
 });
 
 test("admin searches and creates a staff account", async ({ page }) => {

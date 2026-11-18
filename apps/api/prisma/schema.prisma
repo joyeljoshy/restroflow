@@ -20,20 +20,111 @@ enum Role {
 }
 
 model Restaurant {
-  id                 String            @id @default(uuid()) @db.Uuid
-  name               String
-  slug               String            @unique
-  address            String?
-  phone              String?
-  email              String?
-  timezone           String            @default("Asia/Kolkata")
-  currency           String            @default("INR") @db.VarChar(3)
-  taxName            String            @default("Tax")
-  taxRateBasisPoints Int               @default(0)
-  pricesIncludeTax   Boolean           @default(false)
-  memberships        StaffMembership[]
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
+  id                     String                  @id @default(uuid()) @db.Uuid
+  name                   String
+  slug                   String                  @unique
+  address                String?
+  phone                  String?
+  email                  String?
+  timezone               String                  @default("Asia/Kolkata")
+  currency               String                  @default("INR") @db.VarChar(3)
+  taxName                String                  @default("Tax")
+  taxRateBasisPoints     Int                     @default(0)
+  pricesIncludeTax       Boolean                 @default(false)
+  memberships            StaffMembership[]
+  menuCategories         MenuCategory[]
+  menuItems              MenuItem[]
+  modifierGroups         ModifierGroup[]
+  menuItemModifierGroups MenuItemModifierGroup[]
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+}
+
+model MenuCategory {
+  id           String     @id @default(uuid()) @db.Uuid
+  restaurantId String     @db.Uuid
+  name         String     @db.VarChar(100)
+  description  String?    @db.VarChar(500)
+  sortOrder    Int        @default(0)
+  isActive     Boolean    @default(true)
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  items        MenuItem[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([restaurantId, name])
+  @@unique([id, restaurantId])
+  @@index([restaurantId, isActive, sortOrder])
+}
+
+model MenuItem {
+  id             String                  @id @default(uuid()) @db.Uuid
+  restaurantId   String                  @db.Uuid
+  categoryId     String                  @db.Uuid
+  name           String                  @db.VarChar(120)
+  description    String?                 @db.VarChar(1000)
+  priceMinor     Int
+  imageUrl       String?                 @db.VarChar(2048)
+  isAvailable    Boolean                 @default(true)
+  isVegetarian   Boolean                 @default(false)
+  isActive       Boolean                 @default(true)
+  sortOrder      Int                     @default(0)
+  restaurant     Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  category       MenuCategory            @relation(fields: [categoryId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  modifierGroups MenuItemModifierGroup[]
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@unique([id, restaurantId])
+  @@index([restaurantId, categoryId, isActive, isAvailable, sortOrder])
+  @@index([restaurantId, name])
+}
+
+model ModifierGroup {
+  id            String                  @id @default(uuid()) @db.Uuid
+  restaurantId  String                  @db.Uuid
+  name          String                  @db.VarChar(100)
+  minSelections Int                     @default(0)
+  maxSelections Int
+  isActive      Boolean                 @default(true)
+  restaurant    Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  modifiers     Modifier[]
+  menuItems     MenuItemModifierGroup[]
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@unique([restaurantId, name])
+  @@unique([id, restaurantId])
+  @@index([restaurantId, isActive, name])
+}
+
+model Modifier {
+  id              String        @id @default(uuid()) @db.Uuid
+  modifierGroupId String        @db.Uuid
+  name            String        @db.VarChar(100)
+  priceDeltaMinor Int           @default(0)
+  isAvailable     Boolean       @default(true)
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Restrict)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([modifierGroupId, name])
+  @@index([modifierGroupId, isAvailable])
+}
+
+model MenuItemModifierGroup {
+  id              String        @id @default(uuid()) @db.Uuid
+  restaurantId    String        @db.Uuid
+  menuItemId      String        @db.Uuid
+  modifierGroupId String        @db.Uuid
+  sortOrder       Int           @default(0)
+  restaurant      Restaurant    @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  menuItem        MenuItem      @relation(fields: [menuItemId, restaurantId], references: [id, restaurantId], onDelete: Cascade)
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId, restaurantId], references: [id, restaurantId], onDelete: Cascade)
+
+  @@unique([menuItemId, modifierGroupId])
+  @@index([restaurantId, menuItemId, sortOrder])
+  @@index([restaurantId, modifierGroupId])
 }
 
 model User {

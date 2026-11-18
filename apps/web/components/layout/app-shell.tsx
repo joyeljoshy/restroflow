@@ -28,6 +28,7 @@ const roleConfig = {
     label: "Admin",
     items: [
       ["Overview", "/admin", LayoutDashboard],
+      ["Menu", "/admin/menu", ShoppingBag],
       ["Team", "/admin/staff", Users],
       ["Analytics", "/admin#analytics", BarChart3],
       ["Settings", "/admin/settings", Settings],

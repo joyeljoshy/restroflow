@@ -14,6 +14,9 @@ import type { AuthServiceContract } from "./modules/auth/auth.service.js";
 import { HealthController } from "./modules/health/health.controller.js";
 import type { HealthRepository } from "./modules/health/health.repository.js";
 import { HealthService } from "./modules/health/health.service.js";
+import { MenuController } from "./modules/menu/menu.controller.js";
+import type { MenuImageStorage } from "./modules/menu/menu-image.storage.js";
+import type { MenuServiceContract } from "./modules/menu/menu.service.js";
 import { RestaurantController } from "./modules/restaurants/restaurant.controller.js";
 import type { RestaurantServiceContract } from "./modules/restaurants/restaurant.service.js";
 import { StaffController } from "./modules/staff/staff.controller.js";
@@ -29,6 +32,9 @@ type AppOptions = {
   logger: Logger;
   restaurantService: RestaurantServiceContract;
   staffService: StaffServiceContract;
+  menuService?: MenuServiceContract;
+  menuImageStorage?: MenuImageStorage;
+  menuImageDirectory?: string;
   version?: string;
 };
 
@@ -47,6 +53,9 @@ export function createApp(options: AppOptions) {
     options.restaurantService,
   );
   const staffController = new StaffController(options.staffService);
+  const menuController = options.menuService
+    ? new MenuController(options.menuService, options.menuImageStorage)
+    : undefined;
 
   app.disable("x-powered-by");
   app.use(helmet());
@@ -61,6 +70,16 @@ export function createApp(options: AppOptions) {
     }),
   );
   app.use(json({ limit: "1mb" }));
+  if (options.menuImageDirectory) {
+    app.use(
+      "/uploads/menu",
+      express.static(options.menuImageDirectory, {
+        dotfiles: "deny",
+        index: false,
+        maxAge: "1d",
+      }),
+    );
+  }
   app.use(
     pinoHttp({
       logger: options.logger,
@@ -86,6 +105,7 @@ export function createApp(options: AppOptions) {
       options.loginRateLimitMax,
       restaurantController,
       staffController,
+      menuController,
     ),
   );
   app.use(notFoundHandler);

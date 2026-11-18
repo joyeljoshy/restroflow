@@ -1,6 +1,10 @@
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  oxc: { jsx: { runtime: "automatic", importSource: "react" } },
+  resolve: { alias: { "@": fileURLToPath(new URL(".", import.meta.url)) } },
   test: {
     exclude: ["e2e/**", "node_modules/**", ".next/**"],
   },
