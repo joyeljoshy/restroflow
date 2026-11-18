@@ -39,6 +39,7 @@ build/Release
 
 # Dependency directories
 node_modules/
+apps/api/src/generated/
 jspm_packages/
 
 # Snowpack dependency directory (https://snowpack.dev/)
@@ -81,6 +82,9 @@ out
 # Nuxt.js build / generate output
 .nuxt
 dist
+.playwright/
+playwright-report/
+test-results/
 .output
 
 # NitroJS
