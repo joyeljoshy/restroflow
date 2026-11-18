@@ -73,6 +73,12 @@ export function createApp(options: AppOptions) {
   if (options.menuImageDirectory) {
     app.use(
       "/uploads/menu",
+      (_req, res, next) => {
+        // Menu images are intentionally embedded by the separately hosted web app.
+        // Keep Helmet's same-origin policy everywhere else.
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        next();
+      },
       express.static(options.menuImageDirectory, {
         dotfiles: "deny",
         index: false,

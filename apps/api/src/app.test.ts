@@ -1,12 +1,26 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import pino from "pino";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { createApp } from "./app.js";
 import type { AuthServiceContract } from "./modules/auth/auth.service.js";
 import type { HealthRepository } from "./modules/health/health.repository.js";
 
-function buildApp(databaseAvailable: boolean) {
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
+});
+
+function buildApp(databaseAvailable: boolean, menuImageDirectory?: string) {
   const healthRepository: HealthRepository = {
     isDatabaseAvailable: () => Promise.resolve(databaseAvailable),
   };
@@ -31,6 +45,7 @@ function buildApp(databaseAvailable: boolean) {
       create: () => Promise.reject(new Error("Not used by health tests")),
       update: () => Promise.reject(new Error("Not used by health tests")),
     },
+    menuImageDirectory,
   });
 }
 
@@ -61,5 +76,22 @@ describe("GET /api/v1/health", () => {
     const response = await request(buildApp(true)).get("/missing").expect(404);
     const body = response.body as { error: { code: string } };
     expect(body.error.code).toBe("NOT_FOUND");
+  });
+
+  it("allows the web origin to embed locally stored menu images", async () => {
+    const directory = await mkdtemp(
+      path.join(tmpdir(), "restroflow-static-menu-"),
+    );
+    temporaryDirectories.push(directory);
+    await writeFile(path.join(directory, "preview.png"), Buffer.from("image"));
+
+    const response = await request(buildApp(true, directory))
+      .get("/uploads/menu/preview.png")
+      .expect(200);
+
+    expect(response.headers["cross-origin-resource-policy"]).toBe(
+      "cross-origin",
+    );
+    expect(response.headers["content-type"]).toContain("image/png");
   });
 });

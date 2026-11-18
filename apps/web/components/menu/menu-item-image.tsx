@@ -16,8 +16,9 @@ export function MenuItemImage({
   alt: string;
   className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const resolved = resolveMenuImageUrl(imageUrl);
+  const failed = resolved !== null && failedUrl === resolved;
   return (
     <div
       className={cn(
@@ -32,7 +33,7 @@ export function MenuItemImage({
           fill
           unoptimized
           className="object-cover"
-          onError={() => setFailed(true)}
+          onError={() => setFailedUrl(resolved)}
         />
       ) : (
         <div className="text-muted-foreground flex flex-col items-center gap-2">
