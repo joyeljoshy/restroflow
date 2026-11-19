@@ -84,6 +84,8 @@ export interface TableRepository {
     | { kind: "closed"; session: TableSessionRecord }
     | { kind: "not_open" }
     | { kind: "unresolved_orders" }
+    | { kind: "billing_incomplete" }
+    | { kind: "unpaid_bill" }
   >;
 }
 
@@ -289,6 +291,48 @@ export class PrismaTableRepository implements TableRepository {
         },
       });
       if (unresolved > 0) return { kind: "unresolved_orders" } as const;
+      const billableItems = await transaction.orderItem.count({
+        where: {
+          restaurantId,
+          order: { tableSessionId: sessionId, status: "SERVED" },
+          status: { not: "CANCELLED" },
+        },
+      });
+      if (billableItems > 0) {
+        const bill = await transaction.bill.findFirst({
+          where: { restaurantId, tableSessionId: sessionId },
+          select: {
+            id: true,
+            status: true,
+            totalMinor: true,
+            amountPaidMinor: true,
+          },
+        });
+        if (!bill) return { kind: "billing_incomplete" } as const;
+        await transaction.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "Bill"
+          WHERE "id" = ${bill.id}::uuid
+          FOR UPDATE
+        `;
+        const unbilledItems = await transaction.orderItem.count({
+          where: {
+            restaurantId,
+            order: { tableSessionId: sessionId, status: "SERVED" },
+            status: { not: "CANCELLED" },
+            billItem: null,
+          },
+        });
+        if (unbilledItems > 0) return { kind: "billing_incomplete" } as const;
+        const currentBill = await transaction.bill.findUniqueOrThrow({
+          where: { id_restaurantId: { id: bill.id, restaurantId } },
+          select: { status: true, totalMinor: true, amountPaidMinor: true },
+        });
+        if (
+          currentBill.status !== "PAID" ||
+          currentBill.amountPaidMinor !== currentBill.totalMinor
+        )
+          return { kind: "unpaid_bill" } as const;
+      }
       await transaction.tableSession.update({
         where: { id_restaurantId: { id: sessionId, restaurantId } },
         data: {

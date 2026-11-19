@@ -4,6 +4,8 @@ import type { AuthController } from "../modules/auth/auth.controller.js";
 import type { SessionCookieOptions } from "../modules/auth/auth.cookies.js";
 import { createAuthRouter } from "../modules/auth/auth.routes.js";
 import type { AuthServiceContract } from "../modules/auth/auth.service.js";
+import type { BillingController } from "../modules/billing/billing.controller.js";
+import { createBillingRouter } from "../modules/billing/billing.routes.js";
 import type { HealthController } from "../modules/health/health.controller.js";
 import type { CustomerController } from "../modules/customer/customer.controller.js";
 import { createCustomerRouter } from "../modules/customer/customer.routes.js";
@@ -34,6 +36,7 @@ export function createV1Router(
   customerService?: CustomerServiceContract,
   customerCookieOptions?: SessionCookieOptions,
   allowedOrigins: string[] = [],
+  billingController?: BillingController,
 ): Router {
   const router = Router();
   router.use(
@@ -78,6 +81,11 @@ export function createV1Router(
   }
   if (orderController) {
     router.use(createOrderRouter(orderController, authService, cookieOptions));
+  }
+  if (billingController) {
+    router.use(
+      createBillingRouter(billingController, authService, cookieOptions),
+    );
   }
   return router;
 }

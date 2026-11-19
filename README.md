@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 8 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff and customer ordering, a waiter POS, and a real-time Kitchen Display System. Billing, payments, inventory, and analytics are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 9 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff and customer ordering, a waiter POS, a real-time Kitchen Display System, and immutable billing with manual cash/UPI payment recording. Inventory, refunds, gateway settlement, and analytics are intentionally not implemented yet.
 
 ## Architecture
 
@@ -230,6 +230,28 @@ Socket.IO shares the API HTTP server and authenticates the same HTTP-only staff 
 
 The server publishes a minimal versioned `order:changed` invalidation only after a successful transaction commits. An idempotent replay does not publish again. REST remains authoritative: clients deduplicate event IDs/versions, refetch after events and reconnects, and periodically reconcile the KDS. This MVP intentionally uses post-commit publication instead of an outbox, so a process failure in the narrow interval after commit can lose a notification; reconnect and periodic REST reads recover the state.
 
+## Billing and manual payment recording
+
+Administrators, managers, and cashiers use `/cashier` to review active table sessions, preview server-calculated bills, finalize immutable financial snapshots, record partial or full cash/UPI payments, print browser receipts, search history, and close fully paid sessions. Waiters may see limited live billing status and previews but cannot finalize bills or record payments. Kitchen and public customer sessions have no billing access.
+
+Only served orders are billable. Cancelled/rejected orders and cancelled items are excluded, while any unresolved order blocks finalization. Finalization locks the table session and its orders, and the order submission path uses the same session lock; once a bill exists, no later order or item batch can enter that session. PostgreSQL also enforces one bill per session and one bill item per source order item.
+
+Tax uses the restaurant's configured basis-point rate and inclusion mode. The API performs integer-only, half-up rounding per bill line (`PER_LINE_HALF_UP_V1`). For tax-exclusive menus, line tax is added to the payable total. For tax-inclusive menus, the tax component is extracted without increasing the displayed item total. Final bills snapshot the currency, tax name, rate, inclusion mode, computed tax, and rounding policy, so later settings changes do not rewrite history. These configurable calculations require jurisdiction-specific review before commercial tax use.
+
+Cash and UPI are manual records only. RestroFlow does not collect money, query a bank, or verify a UPI transfer. Each payment requires explicit staff confirmation and an actor-scoped `Idempotency-Key`; identical retries return the stored response, conflicting reuse returns `409`, and bill row locks prevent concurrent overpayment. Refunds, reversals, payment gateways, webhooks, and customer-by-customer split billing are outside Part 9.
+
+Billing endpoints are mounted under `/api/v1`:
+
+- `GET /billing/active-sessions`
+- `GET /table-sessions/:id/bill-preview`
+- `POST /table-sessions/:id/bills`
+- `GET /table-sessions/:id/bill`
+- `GET /bills` and `GET /bills/:id`
+- `GET /bills/:id/receipt`
+- `GET|POST /bills/:id/payments`
+
+`POST /table-sessions/:id/bills` performs creation and finalization as one atomic operation; a mutable persisted draft endpoint is intentionally omitted. A table session containing served items can close only after every eligible item is represented in its fully paid bill. Sessions containing no billable items may still close after all orders resolve.
+
 ### Create the first development admin
 
 The seed remains a read-only connectivity check unless every `ADMIN_SEED_*` variable is supplied. Admin creation is refused when `NODE_ENV=production`.
@@ -259,7 +281,9 @@ npm run build
 
 For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open a session, inspect its history, download or print its QR, and rotate the code. In one browser, sign in as a waiter at `/waiter/pos`; in another, sign in as kitchen staff at `/kitchen`. Submit an order and confirm the ticket appears without refreshing. Accept it, start preparation, mark items ready, and verify the waiter status updates. Mark it served from the POS. Repeat with a second batch added after the first is ready and confirm the first batch remains ready while the order returns to preparing. Briefly take one browser offline, change the order from the other, reconnect, and confirm authoritative state recovers. Confirm the table session cannot close until all orders are served, cancelled, or rejected.
 
-For the customer flow, keep the waiter and kitchen browsers open and scan/open the table QR in a third private browser. Browse and customize an item, then use **Customer code** on the waiter table card to issue a code. Activate, submit, and confirm the CUSTOMER ticket appears in the existing KDS. Move it through preparation and verify the customer tracker updates. Open the same QR in a fourth private browser, issue a separate code, and confirm it cannot read the first customer's order. Rotate the QR and confirm the old URL returns unavailable. Close the table session after resolving its orders and confirm both customer REST and realtime access expire. Check phone, tablet, keyboard, offline/reconnect, and page-reload behavior, then call the health endpoint and verify `checks.database` is `up`.
+For the customer flow, keep the waiter and kitchen browsers open and scan/open the table QR in a third private browser. Browse and customize an item, then use **Customer code** on the waiter table card to issue a code. Activate, submit, and confirm the CUSTOMER ticket appears in the existing KDS. Move it through preparation and verify the customer tracker updates. Open the same QR in a fourth private browser, issue a separate code, and confirm it cannot read the first customer's order. Rotate the QR and confirm the old URL returns unavailable.
+
+For billing, serve every active order, sign in as a cashier, open `/cashier`, select the occupied table, verify the preview and tax breakdown, and finalize. Record a partial cash amount, then the remaining amount as manually confirmed UPI; verify the receipt shows both records and a zero outstanding balance. Print the receipt and close the table. Confirm an unpaid bill cannot close, a waiter cannot record payment, an overpayment is rejected, and retrying the same request with one idempotency key does not create another payment. Closing the session should invalidate its customer REST and realtime access. Check phone, tablet, keyboard, offline/reconnect, and page-reload behavior, then call the health endpoint and verify `checks.database` is `up`.
 
 ## Stopping local services
 

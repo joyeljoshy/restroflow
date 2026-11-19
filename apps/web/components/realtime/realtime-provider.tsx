@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  billChangedEventSchema,
   orderChangedEventSchema,
   type RealtimeChannel,
 } from "@restroflow/contracts";
@@ -87,6 +88,19 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       if (event.orderVersion < latest) return;
       latestVersions.current.set(event.orderId, event.orderVersion);
       reconcile();
+    });
+    socket.on("bill:changed", (input: unknown) => {
+      const parsed = billChangedEventSchema.safeParse(input);
+      if (
+        !parsed.success ||
+        parsed.data.restaurantId !== membership.restaurantId ||
+        seenEventIds.current.has(parsed.data.eventId)
+      )
+        return;
+      seenEventIds.current.add(parsed.data.eventId);
+      void queryClient.invalidateQueries({ queryKey: ["billing-sessions"] });
+      void queryClient.invalidateQueries({ queryKey: ["bill"] });
+      void queryClient.invalidateQueries({ queryKey: ["bills"] });
     });
 
     return () => {

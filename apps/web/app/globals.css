@@ -65,3 +65,22 @@ body {
   background: oklch(0.82 0.08 158);
   color: oklch(0.22 0.05 160);
 }
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .receipt,
+  .receipt * {
+    visibility: visible;
+  }
+
+  .receipt {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    box-shadow: none;
+  }
+}

@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 
 import {
+  type BillChangedEvent,
   realtimeSubscriptionSchema,
   customerOrderChangedEventSchema,
   type CustomerOrderChangedEvent,
@@ -15,6 +16,7 @@ import type { AuthServiceContract, AuthSession } from "../auth/auth.service.js";
 import { readCustomerSessionTokenFromCookieHeader } from "../customer/customer.cookies.js";
 import type { CustomerServiceContract } from "../customer/customer.service.js";
 import {
+  createBillChangedEvent,
   createOrderChangedEvent,
   type RealtimePublisher,
 } from "./realtime.publisher.js";
@@ -31,6 +33,7 @@ type ClientEvents = {
 };
 
 type ServerEvents = {
+  "bill:changed": (event: BillChangedEvent) => void;
   "order:changed": (event: OrderChangedEvent) => void;
   "customer:order-changed": (event: CustomerOrderChangedEvent) => void;
 };
@@ -322,5 +325,48 @@ export class SocketIoRealtimePublisher implements RealtimePublisher {
       });
       this.io.to(target).emit("customer:order-changed", parsed);
     }
+  }
+
+  async billChanged(input: {
+    restaurantId: string;
+    billId: string;
+    tableSessionId: string;
+    billVersion: number;
+    changeType: BillChangedEvent["changeType"];
+  }): Promise<void> {
+    if (!this.io || !this.authService) return;
+    const sockets = await this.io
+      .in(room(input.restaurantId, "restaurant"))
+      .fetchSockets();
+    const event = createBillChangedEvent(input);
+    await Promise.all(
+      sockets.map(async (socket) => {
+        if (
+          socket.data.audience !== "staff" ||
+          !["ADMIN", "MANAGER", "CASHIER"].includes(socket.data.role)
+        )
+          return;
+        try {
+          const session = await this.authService!.authenticate(
+            socket.data.sessionToken,
+          );
+          const membership = session.user.memberships.find(
+            (candidate) => candidate.restaurantId === input.restaurantId,
+          );
+          if (
+            !membership ||
+            membership.role !== socket.data.role ||
+            session.membershipIds[input.restaurantId] !==
+              socket.data.membershipId
+          ) {
+            socket.disconnect(true);
+            return;
+          }
+          socket.emit("bill:changed", event);
+        } catch {
+          socket.disconnect(true);
+        }
+      }),
+    );
   }
 }

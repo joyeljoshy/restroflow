@@ -81,7 +81,7 @@ export function createTableRouter(
   );
   router.post(
     "/table-sessions/:id/close",
-    requireRole("ADMIN", "MANAGER", "WAITER"),
+    requireRole("ADMIN", "MANAGER", "WAITER", "CASHIER"),
     validateRequest({ params: tableParamsSchema }),
     controller.closeSession,
   );

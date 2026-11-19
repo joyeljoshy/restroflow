@@ -140,6 +140,7 @@ export type LockedTableSession = {
   id: string;
   status: "OPEN" | "CLOSED";
   closedAt: Date | null;
+  bill: { id: string } | null;
 };
 
 export type OrderSummary = {
@@ -329,7 +330,12 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
       if (locked.length === 0) return null;
       return client.tableSession.findUnique({
         where: { id_restaurantId: { id: tableSessionId, restaurantId } },
-        select: { id: true, status: true, closedAt: true },
+        select: {
+          id: true,
+          status: true,
+          closedAt: true,
+          bill: { select: { id: true } },
+        },
       });
     },
     findOrderSummary: async (restaurantId, orderId) => {

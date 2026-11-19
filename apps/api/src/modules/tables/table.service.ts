@@ -286,6 +286,18 @@ export class TableService implements TableServiceContract {
           "TABLE_SESSION_HAS_UNRESOLVED_ORDERS",
           "Resolve pending restaurant orders before closing this table session.",
         );
+      if (result.kind === "billing_incomplete")
+        throw new AppError(
+          409,
+          "TABLE_SESSION_BILLING_INCOMPLETE",
+          "Finalize a bill containing every served item before closing this table session.",
+        );
+      if (result.kind === "unpaid_bill")
+        throw new AppError(
+          409,
+          "TABLE_SESSION_HAS_OUTSTANDING_BALANCE",
+          "Record the full outstanding balance before closing this table session.",
+        );
       if (result.kind === "not_open")
         throw new AppError(
           409,

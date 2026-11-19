@@ -1,3 +1,5 @@
+import { formatMinorCurrency } from "@/lib/currency";
+
 export function PriceDisplay({
   amountMinor,
   currency = "INR",
@@ -11,11 +13,7 @@ export function PriceDisplay({
 }) {
   return (
     <span className={className}>
-      {new Intl.NumberFormat(locale, {
-        style: "currency",
-        currency,
-        minimumFractionDigits: 2,
-      }).format(amountMinor / 100)}
+      {formatMinorCurrency(amountMinor, currency, locale)}
     </span>
   );
 }

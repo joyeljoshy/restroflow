@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import type { OrderChangedEvent } from "@restroflow/contracts";
+import type {
+  BillChangedEvent,
+  OrderChangedEvent,
+} from "@restroflow/contracts";
 
 export type OrderChangeType = OrderChangedEvent["changeType"];
 
@@ -18,6 +21,21 @@ export class NoopRealtimePublisher implements RealtimePublisher {
   orderChanged(): Promise<void> {
     return Promise.resolve();
   }
+}
+
+export function createBillChangedEvent(input: {
+  restaurantId: string;
+  billId: string;
+  tableSessionId: string;
+  billVersion: number;
+  changeType: BillChangedEvent["changeType"];
+}): BillChangedEvent {
+  return {
+    eventId: randomUUID(),
+    schemaVersion: 1,
+    ...input,
+    occurredAt: new Date().toISOString(),
+  };
 }
 
 export function createOrderChangedEvent(input: {

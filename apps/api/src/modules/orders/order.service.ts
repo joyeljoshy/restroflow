@@ -749,6 +749,12 @@ export class OrderService implements OrderServiceContract {
         "TABLE_SESSION_CLOSED",
         "Closed table sessions cannot accept orders.",
       );
+    if (session.bill)
+      throw new AppError(
+        409,
+        "TABLE_SESSION_BILLED",
+        "A finalized bill prevents new orders or item batches for this table session.",
+      );
     return session;
   }
 

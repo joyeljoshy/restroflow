@@ -15,6 +15,8 @@ import {
 import { PrismaHealthRepository } from "./modules/health/health.repository.js";
 import { PrismaCustomerRepository } from "./modules/customer/customer.repository.js";
 import { CustomerService } from "./modules/customer/customer.service.js";
+import { PrismaBillingRepository } from "./modules/billing/billing.repository.js";
+import { BillingService } from "./modules/billing/billing.service.js";
 import { LocalMenuImageStorage } from "./modules/menu/menu-image.storage.js";
 import { PrismaMenuRepository } from "./modules/menu/menu.repository.js";
 import { MenuService } from "./modules/menu/menu.service.js";
@@ -45,6 +47,10 @@ const menuImageDirectory = path.resolve(env.MENU_IMAGE_DIRECTORY);
 const orderRepository = new PrismaOrderRepository(prisma);
 const realtimePublisher = new SocketIoRealtimePublisher();
 const orderService = new OrderService(orderRepository, realtimePublisher);
+const billingService = new BillingService(
+  new PrismaBillingRepository(prisma),
+  realtimePublisher,
+);
 const customerService = new CustomerService(
   new PrismaCustomerRepository(prisma),
   passwordHasher,
@@ -76,6 +82,7 @@ const app = createApp({
   ),
   orderService,
   customerService,
+  billingService,
   customerCookieOptions: {
     secure: env.NODE_ENV === "production",
     maxAgeMs: 4 * 60 * 60 * 1000,

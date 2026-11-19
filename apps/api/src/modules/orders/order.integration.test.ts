@@ -656,7 +656,7 @@ run("transactional order API against PostgreSQL", () => {
     expect(events).toHaveLength(1);
   });
 
-  it("blocks session closure until all orders are resolved", async () => {
+  it("blocks session closure until orders are resolved and served items are billed", async () => {
     const order = await submit();
     const blocked = await request(app())
       .post(`/api/v1/table-sessions/${sessionId}/close`)
@@ -683,8 +683,11 @@ run("transactional order API against PostgreSQL", () => {
       .patch(`/api/v1/orders/${order.id}/status`)
       .send({ version: ready.version, status: "SERVED" })
       .expect(200);
-    await request(app())
+    const billingBlocked = await request(app())
       .post(`/api/v1/table-sessions/${sessionId}/close`)
-      .expect(200);
+      .expect(409);
+    expect(errorResponseSchema.parse(billingBlocked.body).error.code).toBe(
+      "TABLE_SESSION_BILLING_INCOMPLETE",
+    );
   });
 });

@@ -11,6 +11,8 @@ import { notFoundHandler } from "./middleware/not-found.js";
 import { AuthController } from "./modules/auth/auth.controller.js";
 import type { SessionCookieOptions } from "./modules/auth/auth.cookies.js";
 import type { AuthServiceContract } from "./modules/auth/auth.service.js";
+import { BillingController } from "./modules/billing/billing.controller.js";
+import type { BillingServiceContract } from "./modules/billing/billing.service.js";
 import { HealthController } from "./modules/health/health.controller.js";
 import { CustomerController } from "./modules/customer/customer.controller.js";
 import type { CustomerServiceContract } from "./modules/customer/customer.service.js";
@@ -44,6 +46,7 @@ type AppOptions = {
   tableService?: TableServiceContract;
   orderService?: OrderServiceContract;
   customerService?: CustomerServiceContract;
+  billingService?: BillingServiceContract;
   customerCookieOptions?: SessionCookieOptions;
   version?: string;
 };
@@ -79,6 +82,9 @@ export function createApp(options: AppOptions) {
           options.customerCookieOptions,
         )
       : undefined;
+  const billingController = options.billingService
+    ? new BillingController(options.billingService)
+    : undefined;
 
   app.disable("x-powered-by");
   app.use(helmet());
@@ -141,6 +147,7 @@ export function createApp(options: AppOptions) {
       options.customerService,
       options.customerCookieOptions,
       options.allowedOrigins,
+      billingController,
     ),
   );
   app.use(notFoundHandler);
