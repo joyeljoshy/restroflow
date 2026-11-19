@@ -13,6 +13,7 @@ import { apiError, apiUrl } from "./auth-api";
 
 async function publicRequest(path: string, init?: RequestInit) {
   const response = await fetch(`${apiUrl}${path}`, {
+    cache: "no-store",
     ...init,
     credentials: "include",
     headers: {

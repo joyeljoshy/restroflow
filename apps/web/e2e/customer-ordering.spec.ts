@@ -138,6 +138,10 @@ async function mockCustomerApi(page: Page, failFirstSubmission = false) {
       await json(route, menu());
       return;
     }
+    if (path.endsWith(`/tables/${identifier}`)) {
+      await json(route, { context: menu().context });
+      return;
+    }
     if (path.endsWith("/customer-session") && request.method() === "GET") {
       if (activated)
         await json(route, {
@@ -226,6 +230,66 @@ async function mockCustomerApi(page: Page, failFirstSubmission = false) {
   });
   return { keys };
 }
+
+test("customer page notices when staff opens the table session", async ({
+  page,
+}) => {
+  let hasActiveSession = false;
+  await page.route("**/api/v1/auth/me", (route) =>
+    json(
+      route,
+      {
+        error: { code: "UNAUTHENTICATED", message: "Staff sign-in required." },
+      },
+      401,
+    ),
+  );
+  await page.route("**/api/v1/public/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: corsHeaders });
+      return;
+    }
+    const path = new URL(request.url()).pathname;
+    const context = { ...menu().context, hasActiveSession };
+    if (path.endsWith(`/tables/${identifier}/menu`)) {
+      await json(route, { ...menu(), context });
+      return;
+    }
+    if (path.endsWith(`/tables/${identifier}`)) {
+      await json(route, { context });
+      return;
+    }
+    if (path.endsWith("/customer-session")) {
+      await json(
+        route,
+        {
+          error: {
+            code: "CUSTOMER_SESSION_INVALID",
+            message: "Activation required.",
+          },
+        },
+        401,
+      );
+      return;
+    }
+    await json(
+      route,
+      { error: { code: "NOT_FOUND", message: "Not found." } },
+      404,
+    );
+  });
+
+  await page.goto(`/menu/table/${identifier}`);
+  await expect(
+    page.getByText(/ordering opens after staff starts your table session/i),
+  ).toBeVisible();
+
+  hasActiveSession = true;
+  await expect(
+    page.getByText(/ordering is open\. ask staff for your activation code/i),
+  ).toBeVisible({ timeout: 10_000 });
+});
 
 async function addItemAndActivate(page: Page) {
   await page.goto(`/menu/table/${identifier}`);

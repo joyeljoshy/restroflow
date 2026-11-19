@@ -40,6 +40,7 @@ import { ApiError, apiUrl } from "@/lib/auth-api";
 import {
   activateCustomerSession,
   createCustomerOrder,
+  fetchPublicTable,
   fetchCustomerOrders,
   fetchCustomerSession,
   fetchPublicMenu,
@@ -342,6 +343,11 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
     queryFn: fetchCustomerSession,
     retry: false,
   });
+  const tableContext = useQuery({
+    queryKey: ["public-table", identifier],
+    queryFn: () => fetchPublicTable(identifier),
+    refetchInterval: 5_000,
+  });
   const orders = useQuery({
     queryKey: ["customer-orders"],
     queryFn: fetchCustomerOrders,
@@ -474,6 +480,8 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
     );
 
   const total = cartEstimatedTotal(lines);
+  const hasActiveSession =
+    tableContext.data?.hasActiveSession ?? menu.data.context.hasActiveSession;
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#ecfdf5_0,#fafaf9_22rem)] pb-28">
       <header className="border-b border-emerald-900/10 bg-emerald-950 px-4 py-8 text-white sm:py-12">
@@ -533,11 +541,20 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
       </div>
 
       <div className="mx-auto max-w-6xl space-y-10 px-4 py-8">
-        {!menu.data.context.hasActiveSession && (
+        {!hasActiveSession && (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             <Clock3 className="mr-2 inline size-4" />
             You can browse, but ordering opens after staff starts your table
             session.
+          </div>
+        )}
+        {hasActiveSession && !session.data && (
+          <div
+            className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"
+            role="status"
+          >
+            Ordering is open. Ask staff for your activation code when you are
+            ready to submit.
           </div>
         )}
         {sessionInvalid && (
@@ -796,9 +813,7 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
               )}
               <Button
                 className="min-h-12 w-full"
-                disabled={
-                  submitOrder.isPending || !menu.data.context.hasActiveSession
-                }
+                disabled={submitOrder.isPending || !hasActiveSession}
                 onClick={() => {
                   if (session.data && !sessionInvalid) submitOrder.mutate();
                   else {
