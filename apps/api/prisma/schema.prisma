@@ -64,6 +64,7 @@ model Restaurant {
   taxName                String                  @default("Tax")
   taxRateBasisPoints     Int                     @default(0)
   pricesIncludeTax       Boolean                 @default(false)
+  isActive               Boolean                 @default(true)
   memberships            StaffMembership[]
   menuCategories         MenuCategory[]
   menuItems              MenuItem[]
@@ -74,6 +75,8 @@ model Restaurant {
   orders                 Order[]
   orderItems             OrderItem[]
   idempotencyKeys        IdempotencyKey[]
+  customerSessions       CustomerOrderingSession[]
+  orderingActivations    TableOrderingActivation[]
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
 }
@@ -234,6 +237,8 @@ model TableSession {
   openedBy             StaffMembership    @relation("TableSessionOpenedBy", fields: [openedByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   closedBy             StaffMembership?   @relation("TableSessionClosedBy", fields: [closedByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   orders               Order[]
+  customerSessions     CustomerOrderingSession[]
+  orderingActivations  TableOrderingActivation[]
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
@@ -253,10 +258,12 @@ model Order {
   status                OrderStatus          @default(PENDING)
   version               Int                  @default(1)
   totalMinor            Int
-  createdByMembershipId String               @db.Uuid
+  createdByMembershipId String?              @db.Uuid
+  customerOrderingSessionId String?          @db.Uuid
   restaurant            Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
   tableSession          TableSession         @relation(fields: [tableSessionId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
-  createdBy             StaffMembership      @relation("OrderCreatedBy", fields: [createdByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  createdBy             StaffMembership?     @relation("OrderCreatedBy", fields: [createdByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  customerOrderingSession CustomerOrderingSession? @relation("CustomerOrderOwner", fields: [customerOrderingSessionId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   items                 OrderItem[]
   statusHistory         OrderStatusHistory[]
   idempotencyKeys       IdempotencyKey[]
@@ -268,6 +275,7 @@ model Order {
   @@index([restaurantId, status, createdAt])
   @@index([tableSessionId, createdAt])
   @@index([createdByMembershipId, createdAt])
+  @@index([customerOrderingSessionId, createdAt])
 }
 
 model OrderItem {
@@ -321,15 +329,18 @@ model OrderStatusHistory {
   restaurantId      String          @db.Uuid
   previousStatus    OrderStatus?
   newStatus         OrderStatus
-  actorMembershipId String          @db.Uuid
+  actorMembershipId String?         @db.Uuid
+  customerOrderingSessionId String? @db.Uuid
   reason            String?         @db.VarChar(500)
   order             Order           @relation(fields: [orderId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
-  actor             StaffMembership @relation("OrderStatusActor", fields: [actorMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  actor             StaffMembership? @relation("OrderStatusActor", fields: [actorMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  customerOrderingSession CustomerOrderingSession? @relation("CustomerOrderHistoryActor", fields: [customerOrderingSessionId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   createdAt         DateTime        @default(now())
 
   @@index([orderId, createdAt])
   @@index([restaurantId, newStatus, createdAt])
   @@index([actorMembershipId, createdAt])
+  @@index([customerOrderingSessionId, createdAt])
 }
 
 model OrderItemStatusHistory {
@@ -352,7 +363,8 @@ model OrderItemStatusHistory {
 model IdempotencyKey {
   id                String               @id @default(uuid()) @db.Uuid
   restaurantId      String               @db.Uuid
-  actorMembershipId String               @db.Uuid
+  actorMembershipId String?              @db.Uuid
+  customerOrderingSessionId String?      @db.Uuid
   key               String               @db.VarChar(128)
   operation         IdempotencyOperation
   requestHash       String               @db.Char(64)
@@ -361,12 +373,52 @@ model IdempotencyKey {
   createdAt         DateTime             @default(now())
   expiresAt         DateTime
   restaurant        Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
-  actor             StaffMembership      @relation(fields: [actorMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  actor             StaffMembership?     @relation(fields: [actorMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  customerOrderingSession CustomerOrderingSession? @relation(fields: [customerOrderingSessionId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   resultOrder       Order?               @relation(fields: [resultOrderId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
 
   @@unique([restaurantId, actorMembershipId, key])
+  @@unique([restaurantId, customerOrderingSessionId, key])
   @@index([expiresAt])
   @@index([resultOrderId])
+}
+
+model CustomerOrderingSession {
+  id             String    @id @default(uuid()) @db.Uuid
+  restaurantId   String    @db.Uuid
+  tableSessionId String    @db.Uuid
+  tokenHash      String    @unique @db.Char(64)
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  lastUsedAt     DateTime?
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  tableSession   TableSession @relation(fields: [tableSessionId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  orders         Order[] @relation("CustomerOrderOwner")
+  orderHistory   OrderStatusHistory[] @relation("CustomerOrderHistoryActor")
+  idempotencyKeys IdempotencyKey[]
+  createdAt      DateTime  @default(now())
+
+  @@unique([id, restaurantId])
+  @@index([restaurantId, tableSessionId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model TableOrderingActivation {
+  id             String    @id @default(uuid()) @db.Uuid
+  restaurantId   String    @db.Uuid
+  tableSessionId String    @db.Uuid
+  codeHash       String
+  expiresAt      DateTime
+  failedAttempts Int       @default(0)
+  lockedAt       DateTime?
+  revokedAt      DateTime?
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  tableSession   TableSession @relation(fields: [tableSessionId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  createdAt      DateTime  @default(now())
+
+  @@index([restaurantId, tableSessionId, expiresAt])
+  @@index([expiresAt])
 }
 
 model Session {

@@ -5,6 +5,9 @@ import type { SessionCookieOptions } from "../modules/auth/auth.cookies.js";
 import { createAuthRouter } from "../modules/auth/auth.routes.js";
 import type { AuthServiceContract } from "../modules/auth/auth.service.js";
 import type { HealthController } from "../modules/health/health.controller.js";
+import type { CustomerController } from "../modules/customer/customer.controller.js";
+import { createCustomerRouter } from "../modules/customer/customer.routes.js";
+import type { CustomerServiceContract } from "../modules/customer/customer.service.js";
 import { createHealthRouter } from "../modules/health/health.routes.js";
 import type { MenuController } from "../modules/menu/menu.controller.js";
 import { createMenuRouter } from "../modules/menu/menu.routes.js";
@@ -27,6 +30,10 @@ export function createV1Router(
   menuController?: MenuController,
   tableController?: TableController,
   orderController?: OrderController,
+  customerController?: CustomerController,
+  customerService?: CustomerServiceContract,
+  customerCookieOptions?: SessionCookieOptions,
+  allowedOrigins: string[] = [],
 ): Router {
   const router = Router();
   router.use(
@@ -39,6 +46,18 @@ export function createV1Router(
     ),
   );
   router.use("/health", createHealthRouter(healthController));
+  if (customerController && customerService && customerCookieOptions) {
+    router.use(
+      createCustomerRouter(
+        customerController,
+        customerService,
+        authService,
+        cookieOptions,
+        customerCookieOptions,
+        allowedOrigins,
+      ),
+    );
+  }
   router.use(
     "/restaurants",
     createRestaurantRouter(

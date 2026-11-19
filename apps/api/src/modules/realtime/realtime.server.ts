@@ -2,6 +2,8 @@ import type { Server as HttpServer } from "node:http";
 
 import {
   realtimeSubscriptionSchema,
+  customerOrderChangedEventSchema,
+  type CustomerOrderChangedEvent,
   type OrderChangedEvent,
   type RealtimeChannel,
   type Role,
@@ -10,6 +12,8 @@ import { Server, type Socket } from "socket.io";
 
 import { readSessionTokenFromCookieHeader } from "../auth/auth.cookies.js";
 import type { AuthServiceContract, AuthSession } from "../auth/auth.service.js";
+import { readCustomerSessionTokenFromCookieHeader } from "../customer/customer.cookies.js";
+import type { CustomerServiceContract } from "../customer/customer.service.js";
 import {
   createOrderChangedEvent,
   type RealtimePublisher,
@@ -20,18 +24,33 @@ type ClientEvents = {
     input: unknown,
     acknowledge?: (result: { ok: boolean; error?: string }) => void,
   ) => void;
+  "customer:subscribe": (
+    input: unknown,
+    acknowledge?: (result: { ok: boolean; error?: string }) => void,
+  ) => void;
 };
 
 type ServerEvents = {
   "order:changed": (event: OrderChangedEvent) => void;
+  "customer:order-changed": (event: CustomerOrderChangedEvent) => void;
 };
 
-type SocketData = {
+type StaffSocketData = {
+  audience: "staff";
   restaurantId: string;
   membershipId: string;
   role: Role;
   sessionToken: string;
 };
+
+type CustomerSocketData = {
+  audience: "customer";
+  restaurantId: string;
+  customerSessionId: string;
+  sessionToken: string;
+};
+
+type SocketData = StaffSocketData | CustomerSocketData;
 
 export type RealtimeServer = Server<
   ClientEvents,
@@ -48,6 +67,10 @@ const allowedChannels: Readonly<Record<RealtimeChannel, readonly Role[]>> = {
 
 function room(restaurantId: string, channel: RealtimeChannel) {
   return `restaurant:${restaurantId}:${channel}`;
+}
+
+function customerRoom(customerSessionId: string) {
+  return `customer-session:${customerSessionId}`;
 }
 
 function selectedMembership(socket: Socket, session: AuthSession) {
@@ -69,6 +92,7 @@ export function createRealtimeServer(
   options: {
     allowedOrigins: string[];
     authService: AuthServiceContract;
+    customerService?: CustomerServiceContract;
     revalidateIntervalMs?: number;
   },
 ): RealtimeServer {
@@ -80,6 +104,29 @@ export function createRealtimeServer(
   io.use((socket, next) => {
     void (async () => {
       try {
+        const handshakeAuth = socket.handshake.auth as unknown;
+        const customerAudience =
+          typeof handshakeAuth === "object" &&
+          handshakeAuth !== null &&
+          "audience" in handshakeAuth &&
+          handshakeAuth.audience === "customer";
+        if (customerAudience) {
+          if (!options.customerService) throw new Error("UNAUTHENTICATED");
+          const sessionToken = readCustomerSessionTokenFromCookieHeader(
+            socket.request.headers.cookie,
+          );
+          const session =
+            await options.customerService.authenticate(sessionToken);
+          if (!sessionToken) throw new Error("UNAUTHENTICATED");
+          socket.data = {
+            audience: "customer",
+            restaurantId: session.restaurantId,
+            customerSessionId: session.id,
+            sessionToken,
+          };
+          next();
+          return;
+        }
         const sessionToken = readSessionTokenFromCookieHeader(
           socket.request.headers.cookie,
         );
@@ -90,6 +137,7 @@ export function createRealtimeServer(
           return;
         }
         socket.data = {
+          audience: "staff",
           restaurantId: membership.restaurantId,
           membershipId: session.membershipIds[membership.restaurantId]!,
           role: membership.role,
@@ -105,6 +153,18 @@ export function createRealtimeServer(
   io.on("connection", (socket) => {
     const revalidate = async () => {
       try {
+        if (socket.data.audience === "customer") {
+          if (!options.customerService) throw new Error("UNAUTHENTICATED");
+          const session = await options.customerService.authenticate(
+            socket.data.sessionToken,
+          );
+          if (
+            session.id !== socket.data.customerSessionId ||
+            session.restaurantId !== socket.data.restaurantId
+          )
+            socket.disconnect(true);
+          return;
+        }
         const session = await options.authService.authenticate(
           socket.data.sessionToken,
         );
@@ -124,6 +184,10 @@ export function createRealtimeServer(
     };
 
     socket.on("realtime:subscribe", async (input, acknowledge) => {
+      if (socket.data.audience !== "staff") {
+        acknowledge?.({ ok: false, error: "ROOM_FORBIDDEN" });
+        return;
+      }
       const parsed = realtimeSubscriptionSchema.safeParse(input);
       if (!parsed.success) {
         acknowledge?.({ ok: false, error: "INVALID_SUBSCRIPTION" });
@@ -137,6 +201,32 @@ export function createRealtimeServer(
       }
       await socket.join(room(socket.data.restaurantId, parsed.data.channel));
       acknowledge?.({ ok: true });
+    });
+
+    socket.on("customer:subscribe", async (input, acknowledge) => {
+      if (socket.data.audience !== "customer" || !options.customerService) {
+        acknowledge?.({ ok: false, error: "ROOM_FORBIDDEN" });
+        return;
+      }
+      const parsed = customerOrderChangedEventSchema
+        .pick({ orderId: true })
+        .safeParse(input);
+      if (!parsed.success) {
+        acknowledge?.({ ok: false, error: "INVALID_SUBSCRIPTION" });
+        return;
+      }
+      await revalidate();
+      if (!socket.connected || socket.data.audience !== "customer") return;
+      try {
+        const session = await options.customerService.authenticate(
+          socket.data.sessionToken,
+        );
+        await options.customerService.getOrder(session, parsed.data.orderId);
+        await socket.join(customerRoom(session.id));
+        acknowledge?.({ ok: true });
+      } catch {
+        acknowledge?.({ ok: false, error: "ORDER_FORBIDDEN" });
+      }
     });
 
     const timer = setInterval(
@@ -153,10 +243,16 @@ export function createRealtimeServer(
 export class SocketIoRealtimePublisher implements RealtimePublisher {
   private io: RealtimeServer | undefined;
   private authService: AuthServiceContract | undefined;
+  private customerService: CustomerServiceContract | undefined;
 
-  attach(io: RealtimeServer, authService: AuthServiceContract) {
+  attach(
+    io: RealtimeServer,
+    authService: AuthServiceContract,
+    customerService?: CustomerServiceContract,
+  ) {
     this.io = io;
     this.authService = authService;
+    this.customerService = customerService;
   }
 
   async orderChanged(
@@ -177,6 +273,7 @@ export class SocketIoRealtimePublisher implements RealtimePublisher {
     );
     await Promise.all(
       [...connected.values()].map(async (socket) => {
+        if (socket.data.audience !== "staff") return;
         try {
           const session = await this.authService!.authenticate(
             socket.data.sessionToken,
@@ -198,5 +295,32 @@ export class SocketIoRealtimePublisher implements RealtimePublisher {
     );
     const event = createOrderChangedEvent(input);
     this.io.to(rooms).emit("order:changed", event);
+    if (input.customerOrderingSessionId && this.customerService) {
+      const target = customerRoom(input.customerOrderingSessionId);
+      const customerSockets = await this.io.in(target).fetchSockets();
+      await Promise.all(
+        customerSockets.map(async (socket) => {
+          if (socket.data.audience !== "customer") return;
+          try {
+            const session = await this.customerService!.authenticate(
+              socket.data.sessionToken,
+            );
+            if (session.id !== input.customerOrderingSessionId)
+              socket.disconnect(true);
+          } catch {
+            socket.disconnect(true);
+          }
+        }),
+      );
+      const parsed = customerOrderChangedEventSchema.parse({
+        eventId: event.eventId,
+        schemaVersion: 1,
+        orderId: event.orderId,
+        changeType: event.changeType,
+        orderVersion: event.orderVersion,
+        occurredAt: event.occurredAt,
+      });
+      this.io.to(target).emit("customer:order-changed", parsed);
+    }
   }
 }

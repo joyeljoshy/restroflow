@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 7 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff ordering, a waiter POS, and a real-time Kitchen Display System. Billing, customer ordering, inventory, and analytics are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 8 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff and customer ordering, a waiter POS, and a real-time Kitchen Display System. Billing, payments, inventory, and analytics are intentionally not implemented yet.
 
 ## Architecture
 
@@ -177,7 +177,26 @@ Authenticated table endpoints are mounted directly under `/api/v1`:
 - `GET /table-sessions/:id`, `POST /table-sessions/:id/close`
 - `GET /tables/:id/qr`, `POST /tables/:id/qr/rotate`
 
-Each table has a cryptographically random QR identifier. Rotating it immediately replaces the stored identifier, invalidating earlier codes. QR payloads point at the reserved `/menu/table/:identifier` customer path, but Part 5 intentionally does not implement that public route or customer ordering. A QR identifies a table only; it does not authorize an order.
+Each table has a cryptographically random QR identifier. Rotating it immediately replaces the stored identifier, invalidating earlier codes. QR payloads point at `/menu/table/:identifier`. A QR identifies a table and opens its filtered public menu; it never authorizes an order by itself.
+
+## Customer QR ordering
+
+Customers browse the mobile-first menu at `/menu/table/:identifier`. An active table session and a separate six-digit code issued by an admin, manager, or waiter are required before ordering. Codes are generated with a cryptographically secure random source, Argon2id-hashed, single-use, valid for ten minutes, and locked after five failed attempts. API-level rate limiting adds a source-address bound around verification attempts.
+
+Successful activation creates a separate four-hour customer ordering session. Its opaque token is stored only as a SHA-256 hash and sent in an HTTP-only, SameSite cookie (also `Secure` in production). The session is bound to one restaurant and one open table session, is revocable, and becomes invalid as soon as the restaurant/table is inactive or the table session closes. It never grants staff API access.
+
+Public endpoints are mounted under `/api/v1/public`:
+
+- `GET /tables/:identifier` and `GET /tables/:identifier/menu`
+- `POST /table-access/activate`
+- `GET /customer-session` and `POST /customer-session/logout`
+- `POST|GET /orders` and `GET /orders/:id`
+
+Staff issue or rotate a code with `POST /api/v1/table-sessions/:id/customer-access`. Customer submissions reuse the same transactional pricing, availability, modifier, immutable-snapshot, and post-commit kitchen event path as waiter orders. Customer idempotency keys are scoped to the customer session, so retrying the same payload returns the original order while a conflicting payload returns `409`.
+
+Customer order visibility is intentionally session-specific: a session may read and subscribe only to orders it created. A second customer session at the same table does not inherit those orders. Customer sockets authenticate separately, verify order ownership before joining a `customer-session:{id}` room, receive only minimal `customer:order-changed` invalidations, and refetch authoritative REST state after events and reconnects. Staff restaurant/kitchen/waiter rooms remain unchanged.
+
+MVP security limitation: a staff-provided short code is proof of staff-mediated activation, not strong proof of physical presence. A nearby person could relay it before use, and source-IP limits are imperfect behind shared networks or distributed attackers. Codes are therefore short-lived, one-time, attempt-bounded, and replaceable. Higher-assurance deployments can later add staff device approval or rotating proximity challenges without placing bearer credentials in QR codes.
 
 ## Transactional orders and waiter POS
 
@@ -238,7 +257,9 @@ npm test
 npm run build
 ```
 
-For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open a session, inspect its history, download or print its QR, and rotate the code. In one browser, sign in as a waiter at `/waiter/pos`; in another, sign in as kitchen staff at `/kitchen`. Submit an order and confirm the ticket appears without refreshing. Accept it, start preparation, mark items ready, and verify the waiter status updates. Mark it served from the POS. Repeat with a second batch added after the first is ready and confirm the first batch remains ready while the order returns to preparing. Briefly take one browser offline, change the order from the other, reconnect, and confirm authoritative state recovers. Confirm the table session cannot close until all orders are served, cancelled, or rejected. Check tablet and desktop layouts, then call the health endpoint and verify `checks.database` is `up`.
+For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open a session, inspect its history, download or print its QR, and rotate the code. In one browser, sign in as a waiter at `/waiter/pos`; in another, sign in as kitchen staff at `/kitchen`. Submit an order and confirm the ticket appears without refreshing. Accept it, start preparation, mark items ready, and verify the waiter status updates. Mark it served from the POS. Repeat with a second batch added after the first is ready and confirm the first batch remains ready while the order returns to preparing. Briefly take one browser offline, change the order from the other, reconnect, and confirm authoritative state recovers. Confirm the table session cannot close until all orders are served, cancelled, or rejected.
+
+For the customer flow, keep the waiter and kitchen browsers open and scan/open the table QR in a third private browser. Browse and customize an item, then use **Customer code** on the waiter table card to issue a code. Activate, submit, and confirm the CUSTOMER ticket appears in the existing KDS. Move it through preparation and verify the customer tracker updates. Open the same QR in a fourth private browser, issue a separate code, and confirm it cannot read the first customer's order. Rotate the QR and confirm the old URL returns unavailable. Close the table session after resolving its orders and confirm both customer REST and realtime access expire. Check phone, tablet, keyboard, offline/reconnect, and page-reload behavior, then call the health endpoint and verify `checks.database` is `up`.
 
 ## Stopping local services
 

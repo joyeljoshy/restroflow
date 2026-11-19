@@ -13,6 +13,8 @@ import {
   AuthService,
 } from "./modules/auth/auth.service.js";
 import { PrismaHealthRepository } from "./modules/health/health.repository.js";
+import { PrismaCustomerRepository } from "./modules/customer/customer.repository.js";
+import { CustomerService } from "./modules/customer/customer.service.js";
 import { LocalMenuImageStorage } from "./modules/menu/menu-image.storage.js";
 import { PrismaMenuRepository } from "./modules/menu/menu.repository.js";
 import { MenuService } from "./modules/menu/menu.service.js";
@@ -42,6 +44,12 @@ const passwordHasher = new Argon2PasswordHasher();
 const menuImageDirectory = path.resolve(env.MENU_IMAGE_DIRECTORY);
 const orderRepository = new PrismaOrderRepository(prisma);
 const realtimePublisher = new SocketIoRealtimePublisher();
+const orderService = new OrderService(orderRepository, realtimePublisher);
+const customerService = new CustomerService(
+  new PrismaCustomerRepository(prisma),
+  passwordHasher,
+  orderService,
+);
 const app = createApp({
   allowedOrigins: env.CORS_ORIGINS,
   authService,
@@ -66,15 +74,21 @@ const app = createApp({
     new PrismaTableRepository(prisma),
     env.PUBLIC_WEB_ORIGIN,
   ),
-  orderService: new OrderService(orderRepository, realtimePublisher),
+  orderService,
+  customerService,
+  customerCookieOptions: {
+    secure: env.NODE_ENV === "production",
+    maxAgeMs: 4 * 60 * 60 * 1000,
+  },
 });
 
 const server = createServer(app);
 const realtimeServer = createRealtimeServer(server, {
   allowedOrigins: env.CORS_ORIGINS,
   authService,
+  customerService,
 });
-realtimePublisher.attach(realtimeServer, authService);
+realtimePublisher.attach(realtimeServer, authService, customerService);
 
 server.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, "RestroFlow API listening");

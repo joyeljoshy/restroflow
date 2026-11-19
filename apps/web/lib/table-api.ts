@@ -9,6 +9,7 @@ import {
   type TableListQuery,
   type TableQrCode,
   type TableSession,
+  tableOrderingActivationResponseSchema,
   type UpdateTableRequest,
 } from "@restroflow/contracts";
 
@@ -138,4 +139,17 @@ export async function rotateTableQrCode(
     { method: "POST" },
   );
   return tableQrCodeResponseSchema.parse(await response.json()).qrCode;
+}
+
+export async function issueTableOrderingActivation(
+  restaurantId: string,
+  tableSessionId: string,
+) {
+  const response = await tableRequest(
+    restaurantId,
+    `/api/v1/table-sessions/${tableSessionId}/customer-access`,
+    { method: "POST" },
+  );
+  return tableOrderingActivationResponseSchema.parse(await response.json())
+    .activation;
 }

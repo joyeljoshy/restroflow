@@ -268,3 +268,5 @@ export type UpdateModifierRequest = z.infer<typeof updateModifierRequestSchema>;
 export type AssignModifierGroupsRequest = z.infer<
   typeof assignModifierGroupsRequestSchema
 >;
+export type PublicMenuCategory = z.infer<typeof publicMenuCategorySchema>;
+export type PublicMenuItem = z.infer<typeof publicMenuItemSchema>;

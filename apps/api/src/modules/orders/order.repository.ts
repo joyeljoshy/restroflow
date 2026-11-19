@@ -133,6 +133,9 @@ export type IdempotencyRecord = {
   responseBody: Prisma.JsonValue | null;
 };
 
+export type OrderActor =
+  { kind: "staff"; id: string } | { kind: "customer"; id: string };
+
 export type LockedTableSession = {
   id: string;
   status: "OPEN" | "CLOSED";
@@ -145,6 +148,7 @@ export type OrderSummary = {
   status: OrderStatus;
   version: number;
   totalMinor: number;
+  customerOrderingSessionId: string | null;
   maximumBatch: number;
   items: { id: string; status: OrderItemStatus }[];
 };
@@ -158,12 +162,12 @@ export type ItemStatusChange = {
 export interface OrderTransaction {
   findIdempotency(
     restaurantId: string,
-    actorMembershipId: string,
+    actor: OrderActor,
     key: string,
   ): Promise<IdempotencyRecord | null>;
   reserveIdempotency(input: {
     restaurantId: string;
-    actorMembershipId: string;
+    actor: OrderActor;
     key: string;
     operation: "CREATE_ORDER" | "ADD_ORDER_ITEMS";
     requestHash: string;
@@ -171,7 +175,7 @@ export interface OrderTransaction {
   }): Promise<void>;
   completeIdempotency(
     restaurantId: string,
-    actorMembershipId: string,
+    actor: OrderActor,
     key: string,
     resultOrderId: string,
     responseBody: Prisma.InputJsonValue,
@@ -196,7 +200,8 @@ export interface OrderTransaction {
     restaurantId: string;
     tableSessionId: string;
     orderNumber: string;
-    actorMembershipId: string;
+    actor: OrderActor;
+    source: "WAITER" | "CUSTOMER";
     totalMinor: number;
     items: OrderWriteItem[];
   }): Promise<OrderRecord>;
@@ -228,7 +233,7 @@ export interface OrderRepository {
   ): Promise<T>;
   findIdempotency(
     restaurantId: string,
-    actorMembershipId: string,
+    actor: OrderActor,
     key: string,
   ): Promise<IdempotencyRecord | null>;
   listOrders(
@@ -240,6 +245,19 @@ export interface OrderRepository {
     query: KitchenTicketListQuery,
   ): Promise<OrderRecord[]>;
   findOrder(restaurantId: string, orderId: string): Promise<OrderRecord | null>;
+  listCustomerOrders(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+  ): Promise<OrderRecord[]>;
+  findCustomerOrder(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+    orderId: string,
+  ): Promise<OrderRecord | null>;
+  findOrderCustomerSessionId(
+    restaurantId: string,
+    orderId: string,
+  ): Promise<string | null>;
   findOrderIdByItem(
     restaurantId: string,
     itemId: string,
@@ -250,37 +268,55 @@ export interface OrderRepository {
   ): Promise<OrderHistoryRecord[]>;
 }
 
+function idempotencyWhere(
+  restaurantId: string,
+  actor: OrderActor,
+  key: string,
+) {
+  return actor.kind === "staff"
+    ? {
+        restaurantId_actorMembershipId_key: {
+          restaurantId,
+          actorMembershipId: actor.id,
+          key,
+        },
+      }
+    : {
+        restaurantId_customerOrderingSessionId_key: {
+          restaurantId,
+          customerOrderingSessionId: actor.id,
+          key,
+        },
+      };
+}
+
 function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
   return {
-    findIdempotency: (restaurantId, actorMembershipId, key) =>
+    findIdempotency: (restaurantId, actor, key) =>
       client.idempotencyKey.findUnique({
-        where: {
-          restaurantId_actorMembershipId_key: {
-            restaurantId,
-            actorMembershipId,
-            key,
-          },
-        },
+        where: idempotencyWhere(restaurantId, actor, key),
         select: { operation: true, requestHash: true, responseBody: true },
       }),
     reserveIdempotency: async (input) => {
-      await client.idempotencyKey.create({ data: input });
+      const { actor, ...data } = input;
+      await client.idempotencyKey.create({
+        data: {
+          ...data,
+          ...(actor.kind === "staff"
+            ? { actorMembershipId: actor.id }
+            : { customerOrderingSessionId: actor.id }),
+        },
+      });
     },
     completeIdempotency: async (
       restaurantId,
-      actorMembershipId,
+      actor,
       key,
       resultOrderId,
       responseBody,
     ) => {
       await client.idempotencyKey.update({
-        where: {
-          restaurantId_actorMembershipId_key: {
-            restaurantId,
-            actorMembershipId,
-            key,
-          },
-        },
+        where: idempotencyWhere(restaurantId, actor, key),
         data: { resultOrderId, responseBody },
       });
     },
@@ -305,6 +341,7 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
           status: true,
           version: true,
           totalMinor: true,
+          customerOrderingSessionId: true,
           items: { select: { id: true, status: true, batchNumber: true } },
         },
       });
@@ -334,6 +371,7 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
           status: true,
           version: true,
           totalMinor: true,
+          customerOrderingSessionId: true,
           items: { select: { id: true, status: true, batchNumber: true } },
         },
       });
@@ -385,7 +423,10 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
           restaurantId: input.restaurantId,
           tableSessionId: input.tableSessionId,
           orderNumber: input.orderNumber,
-          createdByMembershipId: input.actorMembershipId,
+          source: input.source,
+          ...(input.actor.kind === "staff"
+            ? { createdByMembershipId: input.actor.id }
+            : { customerOrderingSessionId: input.actor.id }),
           totalMinor: input.totalMinor,
           items: {
             create: input.items.map((item) => ({
@@ -403,7 +444,9 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
           statusHistory: {
             create: {
               newStatus: "PENDING",
-              actorMembershipId: input.actorMembershipId,
+              ...(input.actor.kind === "staff"
+                ? { actorMembershipId: input.actor.id }
+                : { customerOrderingSessionId: input.actor.id }),
               reason: "Order submitted",
             },
           },
@@ -538,19 +581,9 @@ export class PrismaOrderRepository implements OrderRepository {
     );
   }
 
-  findIdempotency(
-    restaurantId: string,
-    actorMembershipId: string,
-    key: string,
-  ) {
+  findIdempotency(restaurantId: string, actor: OrderActor, key: string) {
     return this.prisma.idempotencyKey.findUnique({
-      where: {
-        restaurantId_actorMembershipId_key: {
-          restaurantId,
-          actorMembershipId,
-          key,
-        },
-      },
+      where: idempotencyWhere(restaurantId, actor, key),
       select: { operation: true, requestHash: true, responseBody: true },
     });
   }
@@ -588,6 +621,34 @@ export class PrismaOrderRepository implements OrderRepository {
       where: { id_restaurantId: { id: orderId, restaurantId } },
       select: orderSelection,
     });
+  }
+
+  listCustomerOrders(restaurantId: string, customerOrderingSessionId: string) {
+    return this.prisma.order.findMany({
+      where: { restaurantId, customerOrderingSessionId },
+      select: orderSelection,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 100,
+    });
+  }
+
+  findCustomerOrder(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+    orderId: string,
+  ) {
+    return this.prisma.order.findFirst({
+      where: { id: orderId, restaurantId, customerOrderingSessionId },
+      select: orderSelection,
+    });
+  }
+
+  async findOrderCustomerSessionId(restaurantId: string, orderId: string) {
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, restaurantId },
+      select: { customerOrderingSessionId: true },
+    });
+    return order?.customerOrderingSessionId ?? null;
   }
 
   async findOrderIdByItem(restaurantId: string, itemId: string) {

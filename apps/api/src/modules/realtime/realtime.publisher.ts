@@ -10,6 +10,7 @@ export interface RealtimePublisher {
     orderId: string;
     orderVersion: number;
     changeType: OrderChangeType;
+    customerOrderingSessionId?: string | null;
   }): Promise<void>;
 }
 
@@ -28,7 +29,10 @@ export function createOrderChangedEvent(input: {
   return {
     eventId: randomUUID(),
     schemaVersion: 1,
-    ...input,
+    restaurantId: input.restaurantId,
+    orderId: input.orderId,
+    orderVersion: input.orderVersion,
+    changeType: input.changeType,
     occurredAt: new Date().toISOString(),
   };
 }

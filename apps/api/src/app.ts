@@ -12,6 +12,8 @@ import { AuthController } from "./modules/auth/auth.controller.js";
 import type { SessionCookieOptions } from "./modules/auth/auth.cookies.js";
 import type { AuthServiceContract } from "./modules/auth/auth.service.js";
 import { HealthController } from "./modules/health/health.controller.js";
+import { CustomerController } from "./modules/customer/customer.controller.js";
+import type { CustomerServiceContract } from "./modules/customer/customer.service.js";
 import type { HealthRepository } from "./modules/health/health.repository.js";
 import { HealthService } from "./modules/health/health.service.js";
 import { MenuController } from "./modules/menu/menu.controller.js";
@@ -41,6 +43,8 @@ type AppOptions = {
   menuImageDirectory?: string;
   tableService?: TableServiceContract;
   orderService?: OrderServiceContract;
+  customerService?: CustomerServiceContract;
+  customerCookieOptions?: SessionCookieOptions;
   version?: string;
 };
 
@@ -68,6 +72,13 @@ export function createApp(options: AppOptions) {
   const orderController = options.orderService
     ? new OrderController(options.orderService)
     : undefined;
+  const customerController =
+    options.customerService && options.customerCookieOptions
+      ? new CustomerController(
+          options.customerService,
+          options.customerCookieOptions,
+        )
+      : undefined;
 
   app.disable("x-powered-by");
   app.use(helmet());
@@ -126,6 +137,10 @@ export function createApp(options: AppOptions) {
       menuController,
       tableController,
       orderController,
+      customerController,
+      options.customerService,
+      options.customerCookieOptions,
+      options.allowedOrigins,
     ),
   );
   app.use(notFoundHandler);

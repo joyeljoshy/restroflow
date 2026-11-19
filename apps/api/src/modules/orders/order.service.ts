@@ -4,6 +4,7 @@ import {
   orderResponseSchema,
   type AddOrderItemsRequest,
   type CreateOrderRequest,
+  type CustomerCreateOrderRequest,
   type KitchenTicketListQuery,
   type Order,
   type OrderHistoryEntry,
@@ -27,6 +28,7 @@ import type {
   OrderHistoryRecord,
   OrderRecord,
   OrderRepository,
+  OrderActor,
   OrderTransaction,
   OrderWriteItem,
 } from "./order.repository.js";
@@ -45,6 +47,13 @@ export interface OrderServiceContract {
     idempotencyKey: string,
     input: CreateOrderRequest,
   ): Promise<Order>;
+  createCustomerOrder(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+    tableSessionId: string,
+    idempotencyKey: string,
+    input: CustomerCreateOrderRequest,
+  ): Promise<Order>;
   listOrders(
     restaurantId: string,
     query: OrderListQuery,
@@ -58,6 +67,15 @@ export interface OrderServiceContract {
     };
   }>;
   getOrder(restaurantId: string, orderId: string): Promise<Order>;
+  listCustomerOrders(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+  ): Promise<Order[]>;
+  getCustomerOrder(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+    orderId: string,
+  ): Promise<Order>;
   listKitchenTickets(
     restaurantId: string,
     query: KitchenTicketListQuery,
@@ -99,10 +117,15 @@ function toOrder(record: OrderRecord): Order {
     status: record.status,
     version: record.version,
     totalMinor: record.totalMinor,
-    createdBy: {
-      id: record.createdBy.id,
-      displayName: record.createdBy.user.displayName,
-    },
+    createdBy: record.createdBy
+      ? {
+          id: record.createdBy.id,
+          displayName: record.createdBy.user.displayName,
+        }
+      : {
+          id: record.id,
+          displayName: "Customer",
+        },
     items: record.items.map((item) => ({
       ...item,
       modifiers: item.modifiers,
@@ -119,10 +142,12 @@ function toHistory(record: OrderHistoryRecord): OrderHistoryEntry {
     id: record.id,
     previousStatus: record.previousStatus,
     newStatus: record.newStatus,
-    actor: {
-      id: record.actor.id,
-      displayName: record.actor.user.displayName,
-    },
+    actor: record.actor
+      ? { id: record.actor.id, displayName: record.actor.user.displayName }
+      : {
+          id: record.id,
+          displayName: "Customer",
+        },
     reason: record.reason,
     createdAt: record.createdAt.toISOString(),
   };
@@ -206,31 +231,49 @@ export class OrderService implements OrderServiceContract {
     idempotencyKey: string,
     input: CreateOrderRequest,
   ) {
+    return this.createOrderForActor(
+      restaurantId,
+      { kind: "staff", id: actorMembershipId },
+      "WAITER",
+      input.tableSessionId,
+      idempotencyKey,
+      input.items,
+    );
+  }
+
+  private async createOrderForActor(
+    restaurantId: string,
+    actor: OrderActor,
+    source: "WAITER" | "CUSTOMER",
+    tableSessionId: string,
+    idempotencyKey: string,
+    inputs: OrderItemInput[],
+  ) {
     const result = await this.executeIdempotent(
       restaurantId,
-      actorMembershipId,
+      actor,
       idempotencyKey,
       "CREATE_ORDER",
-      input,
+      { tableSessionId, items: inputs },
       async (transaction) => {
         await this.requireOpenSession(
           transaction,
           restaurantId,
-          input.tableSessionId,
+          tableSessionId,
         );
         const items = await this.priceItems(
           transaction,
           restaurantId,
-          input.items,
+          inputs,
           1,
         );
-        const totalMinor = this.total(items);
         return transaction.createOrder({
           restaurantId,
-          tableSessionId: input.tableSessionId,
+          tableSessionId,
           orderNumber: orderNumber(),
-          actorMembershipId,
-          totalMinor,
+          actor,
+          source,
+          totalMinor: this.total(items),
           items,
         });
       },
@@ -238,6 +281,23 @@ export class OrderService implements OrderServiceContract {
     if (result.changed)
       await this.publish(result.order, restaurantId, "CREATED");
     return result.order;
+  }
+
+  createCustomerOrder(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+    tableSessionId: string,
+    idempotencyKey: string,
+    input: CustomerCreateOrderRequest,
+  ) {
+    return this.createOrderForActor(
+      restaurantId,
+      { kind: "customer", id: customerOrderingSessionId },
+      "CUSTOMER",
+      tableSessionId,
+      idempotencyKey,
+      input.items,
+    );
   }
 
   async listOrders(restaurantId: string, query: OrderListQuery) {
@@ -262,6 +322,32 @@ export class OrderService implements OrderServiceContract {
     return toOrder(order);
   }
 
+  async listCustomerOrders(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+  ) {
+    return (
+      await this.repository.listCustomerOrders(
+        restaurantId,
+        customerOrderingSessionId,
+      )
+    ).map(toOrder);
+  }
+
+  async getCustomerOrder(
+    restaurantId: string,
+    customerOrderingSessionId: string,
+    orderId: string,
+  ) {
+    const order = await this.repository.findCustomerOrder(
+      restaurantId,
+      customerOrderingSessionId,
+      orderId,
+    );
+    if (!order) throw new AppError(404, "ORDER_NOT_FOUND", "Order not found.");
+    return toOrder(order);
+  }
+
   async listKitchenTickets(
     restaurantId: string,
     query: KitchenTicketListQuery,
@@ -282,7 +368,7 @@ export class OrderService implements OrderServiceContract {
   ) {
     const result = await this.executeIdempotent(
       restaurantId,
-      actorMembershipId,
+      { kind: "staff", id: actorMembershipId },
       idempotencyKey,
       "ADD_ORDER_ITEMS",
       { orderId, ...input },
@@ -502,7 +588,7 @@ export class OrderService implements OrderServiceContract {
 
   private async executeIdempotent(
     restaurantId: string,
-    actorMembershipId: string,
+    actor: OrderActor,
     key: string,
     operation: IdempotencyRecord["operation"],
     input: unknown,
@@ -511,7 +597,7 @@ export class OrderService implements OrderServiceContract {
     const hash = requestHash(input);
     const existing = await this.repository.findIdempotency(
       restaurantId,
-      actorMembershipId,
+      actor,
       key,
     );
     if (existing)
@@ -521,7 +607,7 @@ export class OrderService implements OrderServiceContract {
       return await this.repository.transaction(async (transaction) => {
         const inTransaction = await transaction.findIdempotency(
           restaurantId,
-          actorMembershipId,
+          actor,
           key,
         );
         if (inTransaction)
@@ -531,7 +617,7 @@ export class OrderService implements OrderServiceContract {
           };
         await transaction.reserveIdempotency({
           restaurantId,
-          actorMembershipId,
+          actor,
           key,
           operation,
           requestHash: hash,
@@ -541,7 +627,7 @@ export class OrderService implements OrderServiceContract {
         const response = { order };
         await transaction.completeIdempotency(
           restaurantId,
-          actorMembershipId,
+          actor,
           key,
           order.id,
           response,
@@ -552,7 +638,7 @@ export class OrderService implements OrderServiceContract {
       if (isErrorCode(error, "P2002") || isSerializationConflict(error)) {
         const concurrent = await this.repository.findIdempotency(
           restaurantId,
-          actorMembershipId,
+          actor,
           key,
         );
         if (concurrent)
@@ -626,16 +712,19 @@ export class OrderService implements OrderServiceContract {
     return [];
   }
 
-  private publish(
+  private async publish(
     order: Order,
     restaurantId: string,
     changeType: Parameters<RealtimePublisher["orderChanged"]>[0]["changeType"],
   ) {
+    const customerOrderingSessionId =
+      await this.repository.findOrderCustomerSessionId(restaurantId, order.id);
     return this.publisher.orderChanged({
       restaurantId,
       orderId: order.id,
       orderVersion: order.version,
       changeType,
+      customerOrderingSessionId,
     });
   }
 

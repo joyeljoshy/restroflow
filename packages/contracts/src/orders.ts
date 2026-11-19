@@ -47,6 +47,10 @@ export const createOrderRequestSchema = z
   .object({ tableSessionId: id, items: orderItemsInputSchema })
   .strict();
 
+export const customerCreateOrderRequestSchema = z
+  .object({ items: orderItemsInputSchema })
+  .strict();
+
 export const addOrderItemsRequestSchema = z
   .object({
     version: z.number().int().positive(),
@@ -173,6 +177,9 @@ export type OrderStatus = z.infer<typeof orderStatusSchema>;
 export type OrderItemStatus = z.infer<typeof orderItemStatusSchema>;
 export type OrderItemInput = z.infer<typeof orderItemInputSchema>;
 export type CreateOrderRequest = z.infer<typeof createOrderRequestSchema>;
+export type CustomerCreateOrderRequest = z.infer<
+  typeof customerCreateOrderRequestSchema
+>;
 export type AddOrderItemsRequest = z.infer<typeof addOrderItemsRequestSchema>;
 export type UpdateOrderStatusRequest = z.infer<
   typeof updateOrderStatusRequestSchema

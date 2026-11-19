@@ -1,4 +1,5 @@
 export * from "./auth";
+export * from "./customer";
 export * from "./health";
 export * from "./http";
 export * from "./menu";

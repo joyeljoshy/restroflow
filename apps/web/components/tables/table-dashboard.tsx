@@ -9,6 +9,7 @@ import {
   Archive,
   Clock3,
   History,
+  KeyRound,
   LoaderCircle,
   Pencil,
   Plus,
@@ -36,6 +37,7 @@ import {
   fetchTableQrCode,
   fetchTableSessions,
   fetchTables,
+  issueTableOrderingActivation,
   openTableSession,
   rotateTableQrCode,
   updateTable,
@@ -77,6 +79,7 @@ export function TableDashboard({
     null,
   );
   const [qrTable, setQrTable] = useState<RestaurantTable | null>(null);
+  const [accessTable, setAccessTable] = useState<RestaurantTable | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const tables = useQuery({
     queryKey: ["tables", restaurantId, search, occupancy],
@@ -147,6 +150,13 @@ export function TableDashboard({
         "QR code rotated. Previous codes no longer identify this table.",
       );
     },
+  });
+  const issueAccess = useMutation({
+    mutationFn: () =>
+      issueTableOrderingActivation(
+        restaurantId!,
+        accessTable!.activeSession!.id,
+      ),
   });
 
   const downloadQr = () => {
@@ -295,13 +305,20 @@ export function TableDashboard({
                     </Button>
                   )}
                   {table.occupancy === "OCCUPIED" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setConfirmation({ kind: "close", table })}
-                    >
-                      Close session
-                    </Button>
+                    <>
+                      <Button size="sm" onClick={() => setAccessTable(table)}>
+                        <KeyRound className="size-4" /> Customer code
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setConfirmation({ kind: "close", table })
+                        }
+                      >
+                        Close session
+                      </Button>
+                    </>
                   )}
                   <Button
                     size="sm"
@@ -412,6 +429,59 @@ export function TableDashboard({
               Confirm
             </Button>
           </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={accessTable !== null}
+        onClose={() => {
+          setAccessTable(null);
+          issueAccess.reset();
+        }}
+        title="Customer ordering code"
+        description="This single-use code expires after 10 minutes. Share it only with guests at this table."
+      >
+        <div className="space-y-5 p-5 text-center sm:p-6">
+          {issueAccess.data ? (
+            <>
+              <p className="text-muted-foreground text-sm">
+                Code for <strong>{accessTable?.displayName}</strong>
+              </p>
+              <output className="block font-mono text-4xl font-black tracking-[.22em] text-emerald-800">
+                {issueAccess.data.activationCode}
+              </output>
+              <p className="text-muted-foreground text-xs">
+                Expires{" "}
+                {new Date(issueAccess.data.expiresAt).toLocaleTimeString()}
+              </p>
+            </>
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              Issuing a new code immediately invalidates any previous unused
+              code.
+            </p>
+          )}
+          {issueAccess.isError && (
+            <p
+              className="rounded-lg bg-red-50 p-3 text-sm text-red-800"
+              role="alert"
+            >
+              {errorText(
+                issueAccess.error,
+                "The customer code could not be issued.",
+              )}
+            </p>
+          )}
+          <Button
+            className="w-full"
+            onClick={() => issueAccess.mutate()}
+            disabled={issueAccess.isPending}
+          >
+            {issueAccess.isPending && (
+              <LoaderCircle className="size-4 animate-spin" />
+            )}
+            {issueAccess.data ? "Rotate code" : "Issue code"}
+          </Button>
         </div>
       </Dialog>
 
