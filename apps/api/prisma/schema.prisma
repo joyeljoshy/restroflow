@@ -192,6 +192,7 @@ model StaffMembership {
   closedTableSessions TableSession[]       @relation("TableSessionClosedBy")
   createdOrders       Order[]              @relation("OrderCreatedBy")
   orderStatusHistory  OrderStatusHistory[] @relation("OrderStatusActor")
+  itemStatusHistory   OrderItemStatusHistory[] @relation("OrderItemStatusActor")
   idempotencyKeys     IdempotencyKey[]
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
@@ -285,10 +286,12 @@ model OrderItem {
   restaurant          Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
   menuItem            MenuItem            @relation(fields: [menuItemId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   modifiers           OrderItemModifier[]
+  statusHistory       OrderItemStatusHistory[]
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
   @@unique([id, orderId])
+  @@unique([id, restaurantId])
   @@index([orderId, batchNumber, createdAt])
   @@index([restaurantId, status, createdAt])
   @@index([menuItemId])
@@ -325,6 +328,23 @@ model OrderStatusHistory {
   createdAt         DateTime        @default(now())
 
   @@index([orderId, createdAt])
+  @@index([restaurantId, newStatus, createdAt])
+  @@index([actorMembershipId, createdAt])
+}
+
+model OrderItemStatusHistory {
+  id                String          @id @default(uuid()) @db.Uuid
+  orderItemId       String          @db.Uuid
+  restaurantId      String          @db.Uuid
+  previousStatus    OrderItemStatus?
+  newStatus         OrderItemStatus
+  actorMembershipId String          @db.Uuid
+  reason            String?         @db.VarChar(500)
+  orderItem         OrderItem       @relation(fields: [orderItemId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  actor             StaffMembership @relation("OrderItemStatusActor", fields: [actorMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  createdAt         DateTime        @default(now())
+
+  @@index([orderItemId, createdAt])
   @@index([restaurantId, newStatus, createdAt])
   @@index([actorMembershipId, createdAt])
 }

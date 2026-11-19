@@ -4,17 +4,25 @@ import {
   orderResponseSchema,
   type AddOrderItemsRequest,
   type CreateOrderRequest,
+  type KitchenTicketListQuery,
   type Order,
   type OrderHistoryEntry,
   type OrderItemInput,
   type OrderListQuery,
   type Role,
+  type UpdateOrderItemStatusRequest,
   type UpdateOrderStatusRequest,
 } from "@restroflow/contracts";
 import { AppError } from "../../errors/app-error.js";
-import { partSixTransitions } from "./order.policy.js";
+import {
+  aggregatePreparationStatus,
+  canRoleSetOrderStatus,
+  itemTransitions,
+  orderTransitions,
+} from "./order.policy.js";
 import type {
   IdempotencyRecord,
+  ItemStatusChange,
   MenuItemForOrder,
   OrderHistoryRecord,
   OrderRecord,
@@ -22,6 +30,10 @@ import type {
   OrderTransaction,
   OrderWriteItem,
 } from "./order.repository.js";
+import {
+  NoopRealtimePublisher,
+  type RealtimePublisher,
+} from "../realtime/realtime.publisher.js";
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_DATABASE_INTEGER = 2_147_483_647;
@@ -46,6 +58,10 @@ export interface OrderServiceContract {
     };
   }>;
   getOrder(restaurantId: string, orderId: string): Promise<Order>;
+  listKitchenTickets(
+    restaurantId: string,
+    query: KitchenTicketListQuery,
+  ): Promise<{ orders: Order[] }>;
   addItems(
     restaurantId: string,
     actorMembershipId: string,
@@ -59,6 +75,13 @@ export interface OrderServiceContract {
     role: Role,
     orderId: string,
     input: UpdateOrderStatusRequest,
+  ): Promise<Order>;
+  updateItemStatus(
+    restaurantId: string,
+    actorMembershipId: string,
+    role: Role,
+    itemId: string,
+    input: UpdateOrderItemStatusRequest,
   ): Promise<Order>;
   listHistory(
     restaurantId: string,
@@ -172,15 +195,18 @@ function orderNumber(): string {
 }
 
 export class OrderService implements OrderServiceContract {
-  constructor(private readonly repository: OrderRepository) {}
+  constructor(
+    private readonly repository: OrderRepository,
+    private readonly publisher: RealtimePublisher = new NoopRealtimePublisher(),
+  ) {}
 
-  createOrder(
+  async createOrder(
     restaurantId: string,
     actorMembershipId: string,
     idempotencyKey: string,
     input: CreateOrderRequest,
   ) {
-    return this.executeIdempotent(
+    const result = await this.executeIdempotent(
       restaurantId,
       actorMembershipId,
       idempotencyKey,
@@ -209,6 +235,9 @@ export class OrderService implements OrderServiceContract {
         });
       },
     );
+    if (result.changed)
+      await this.publish(result.order, restaurantId, "CREATED");
+    return result.order;
   }
 
   async listOrders(restaurantId: string, query: OrderListQuery) {
@@ -233,14 +262,25 @@ export class OrderService implements OrderServiceContract {
     return toOrder(order);
   }
 
-  addItems(
+  async listKitchenTickets(
+    restaurantId: string,
+    query: KitchenTicketListQuery,
+  ) {
+    const records = await this.repository.listKitchenTickets(
+      restaurantId,
+      query,
+    );
+    return { orders: records.map(toOrder) };
+  }
+
+  async addItems(
     restaurantId: string,
     actorMembershipId: string,
     orderId: string,
     idempotencyKey: string,
     input: AddOrderItemsRequest,
   ) {
-    return this.executeIdempotent(
+    const result = await this.executeIdempotent(
       restaurantId,
       actorMembershipId,
       idempotencyKey,
@@ -263,11 +303,13 @@ export class OrderService implements OrderServiceContract {
           throw new AppError(404, "ORDER_NOT_FOUND", "Order not found.");
         if (locked.version !== input.version)
           throw this.versionConflict(locked.version);
-        if (locked.status !== "PENDING" && locked.status !== "ACCEPTED")
+        if (
+          !["PENDING", "ACCEPTED", "PREPARING", "READY"].includes(locked.status)
+        )
           throw new AppError(
             409,
             "ORDER_NOT_MODIFIABLE",
-            "Items can only be added to pending or accepted orders.",
+            "Items cannot be added to a terminal order.",
           );
         const items = await this.priceItems(
           transaction,
@@ -288,11 +330,17 @@ export class OrderService implements OrderServiceContract {
           expectedVersion: input.version,
           totalMinor: additionalTotal,
           items,
+          actorMembershipId,
+          previousStatus: locked.status,
+          newStatus: locked.status === "READY" ? "PREPARING" : locked.status,
         });
         if (!updated) throw this.versionConflict(locked.version);
         return updated;
       },
     );
+    if (result.changed)
+      await this.publish(result.order, restaurantId, "ITEMS_ADDED");
+    return result.order;
   }
 
   async updateStatus(
@@ -302,11 +350,11 @@ export class OrderService implements OrderServiceContract {
     orderId: string,
     input: UpdateOrderStatusRequest,
   ) {
-    if (role === "WAITER" && input.status !== "CANCELLED")
+    if (!canRoleSetOrderStatus(role, input.status))
       throw new AppError(
         403,
         "ORDER_STATUS_FORBIDDEN",
-        "Waiters can only cancel pending or accepted orders.",
+        "Your staff role cannot perform this order status change.",
       );
     try {
       const record = await this.repository.transaction(async (transaction) => {
@@ -315,13 +363,28 @@ export class OrderService implements OrderServiceContract {
           throw new AppError(404, "ORDER_NOT_FOUND", "Order not found.");
         if (locked.version !== input.version)
           throw this.versionConflict(locked.version);
-        if (!partSixTransitions[locked.status].includes(input.status))
+        if (
+          role === "WAITER" &&
+          input.status === "CANCELLED" &&
+          locked.status !== "PENDING" &&
+          locked.status !== "ACCEPTED"
+        )
+          throw new AppError(
+            403,
+            "ORDER_STATUS_FORBIDDEN",
+            "Waiters can only cancel pending or accepted orders.",
+          );
+        if (!orderTransitions[locked.status].includes(input.status))
           throw new AppError(
             409,
             "INVALID_ORDER_STATUS_TRANSITION",
             `An order cannot move from ${locked.status} to ${input.status}.`,
           );
-        const updated = await transaction.updateStatus({
+        const itemChanges = this.itemChangesForOrderStatus(
+          locked.items,
+          input.status,
+        );
+        const updated = await transaction.applyStatusChanges({
           restaurantId,
           orderId,
           expectedVersion: input.version,
@@ -329,11 +392,101 @@ export class OrderService implements OrderServiceContract {
           newStatus: input.status,
           actorMembershipId,
           reason: input.reason ?? null,
+          itemChanges,
         });
         if (!updated) throw this.versionConflict(locked.version);
         return updated;
       });
-      return toOrder(record);
+      const order = toOrder(record);
+      await this.publish(order, restaurantId, "STATUS_UPDATED");
+      return order;
+    } catch (error) {
+      if (isSerializationConflict(error)) throw this.concurrentConflict();
+      throw error;
+    }
+  }
+
+  async updateItemStatus(
+    restaurantId: string,
+    actorMembershipId: string,
+    role: Role,
+    itemId: string,
+    input: UpdateOrderItemStatusRequest,
+  ) {
+    if (
+      !["ADMIN", "MANAGER", "KITCHEN"].includes(role) ||
+      (input.status === "CANCELLED" && role === "KITCHEN") ||
+      !["PREPARING", "READY", "CANCELLED"].includes(input.status)
+    )
+      throw new AppError(
+        403,
+        "ORDER_ITEM_STATUS_FORBIDDEN",
+        "Your staff role cannot perform this item status change.",
+      );
+
+    const orderId = await this.repository.findOrderIdByItem(
+      restaurantId,
+      itemId,
+    );
+    if (!orderId)
+      throw new AppError(404, "ORDER_ITEM_NOT_FOUND", "Order item not found.");
+
+    try {
+      const record = await this.repository.transaction(async (transaction) => {
+        const locked = await transaction.lockOrder(restaurantId, orderId);
+        if (!locked)
+          throw new AppError(404, "ORDER_NOT_FOUND", "Order not found.");
+        if (locked.version !== input.version)
+          throw this.versionConflict(locked.version);
+        if (!["ACCEPTED", "PREPARING", "READY"].includes(locked.status))
+          throw new AppError(
+            409,
+            "ORDER_ITEM_NOT_MODIFIABLE",
+            "Items cannot be changed for this order status.",
+          );
+        const item = locked.items.find((candidate) => candidate.id === itemId);
+        if (!item)
+          throw new AppError(
+            404,
+            "ORDER_ITEM_NOT_FOUND",
+            "Order item not found.",
+          );
+        if (!itemTransitions[item.status].includes(input.status))
+          throw new AppError(
+            409,
+            "INVALID_ORDER_ITEM_STATUS_TRANSITION",
+            `An item cannot move from ${item.status} to ${input.status}.`,
+          );
+
+        const nextStatuses = locked.items.map((candidate) =>
+          candidate.id === itemId ? input.status : candidate.status,
+        );
+        const nextOrderStatus = aggregatePreparationStatus(
+          locked.status,
+          nextStatuses,
+        );
+        const updated = await transaction.applyStatusChanges({
+          restaurantId,
+          orderId,
+          expectedVersion: input.version,
+          previousStatus: locked.status,
+          newStatus: nextOrderStatus,
+          actorMembershipId,
+          reason: input.reason ?? `Item moved to ${input.status}`,
+          itemChanges: [
+            {
+              itemId,
+              previousStatus: item.status,
+              newStatus: input.status,
+            },
+          ],
+        });
+        if (!updated) throw this.versionConflict(locked.version);
+        return updated;
+      });
+      const order = toOrder(record);
+      await this.publish(order, restaurantId, "ITEM_UPDATED");
+      return order;
     } catch (error) {
       if (isSerializationConflict(error)) throw this.concurrentConflict();
       throw error;
@@ -354,14 +507,15 @@ export class OrderService implements OrderServiceContract {
     operation: IdempotencyRecord["operation"],
     input: unknown,
     work: (transaction: OrderTransaction) => Promise<OrderRecord>,
-  ): Promise<Order> {
+  ): Promise<{ order: Order; changed: boolean }> {
     const hash = requestHash(input);
     const existing = await this.repository.findIdempotency(
       restaurantId,
       actorMembershipId,
       key,
     );
-    if (existing) return replay(existing, operation, hash);
+    if (existing)
+      return { order: replay(existing, operation, hash), changed: false };
 
     try {
       return await this.repository.transaction(async (transaction) => {
@@ -370,7 +524,11 @@ export class OrderService implements OrderServiceContract {
           actorMembershipId,
           key,
         );
-        if (inTransaction) return replay(inTransaction, operation, hash);
+        if (inTransaction)
+          return {
+            order: replay(inTransaction, operation, hash),
+            changed: false,
+          };
         await transaction.reserveIdempotency({
           restaurantId,
           actorMembershipId,
@@ -388,7 +546,7 @@ export class OrderService implements OrderServiceContract {
           order.id,
           response,
         );
-        return order;
+        return { order, changed: true };
       });
     } catch (error) {
       if (isErrorCode(error, "P2002") || isSerializationConflict(error)) {
@@ -397,11 +555,88 @@ export class OrderService implements OrderServiceContract {
           actorMembershipId,
           key,
         );
-        if (concurrent) return replay(concurrent, operation, hash);
+        if (concurrent)
+          return {
+            order: replay(concurrent, operation, hash),
+            changed: false,
+          };
         if (isSerializationConflict(error)) throw this.concurrentConflict();
       }
       throw error;
     }
+  }
+
+  private itemChangesForOrderStatus(
+    items: readonly {
+      id: string;
+      status: ItemStatusChange["previousStatus"];
+    }[],
+    target: UpdateOrderStatusRequest["status"],
+  ): ItemStatusChange[] {
+    if (target === "PREPARING") {
+      return items
+        .filter((item) => item.status === "PENDING")
+        .map((item) => ({
+          itemId: item.id,
+          previousStatus: item.status,
+          newStatus: "PREPARING",
+        }));
+    }
+    if (target === "READY") {
+      const active = items.filter((item) => item.status !== "CANCELLED");
+      if (
+        active.length === 0 ||
+        active.some(
+          (item) => item.status !== "PREPARING" && item.status !== "READY",
+        )
+      )
+        throw new AppError(
+          409,
+          "ORDER_ITEMS_NOT_READY",
+          "Every active item must be preparing or ready before completing the ticket.",
+        );
+      return active
+        .filter((item) => item.status === "PREPARING")
+        .map((item) => ({
+          itemId: item.id,
+          previousStatus: item.status,
+          newStatus: "READY",
+        }));
+    }
+    if (target === "CANCELLED" || target === "REJECTED") {
+      return items
+        .filter(
+          (item) => item.status !== "CANCELLED" && item.status !== "SERVED",
+        )
+        .map((item) => ({
+          itemId: item.id,
+          previousStatus: item.status,
+          newStatus: "CANCELLED",
+        }));
+    }
+    if (target === "SERVED") {
+      return items
+        .filter((item) => item.status === "READY")
+        .map((item) => ({
+          itemId: item.id,
+          previousStatus: item.status,
+          newStatus: "SERVED",
+        }));
+    }
+    return [];
+  }
+
+  private publish(
+    order: Order,
+    restaurantId: string,
+    changeType: Parameters<RealtimePublisher["orderChanged"]>[0]["changeType"],
+  ) {
+    return this.publisher.orderChanged({
+      restaurantId,
+      orderId: order.id,
+      orderVersion: order.version,
+      changeType,
+    });
   }
 
   private async requireOpenSession(

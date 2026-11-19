@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import path from "node:path";
+import { createServer } from "node:http";
 
 import { createApp } from "./app.js";
 import { loadEnvironment } from "./config/env.js";
@@ -17,6 +18,10 @@ import { PrismaMenuRepository } from "./modules/menu/menu.repository.js";
 import { MenuService } from "./modules/menu/menu.service.js";
 import { PrismaOrderRepository } from "./modules/orders/order.repository.js";
 import { OrderService } from "./modules/orders/order.service.js";
+import {
+  createRealtimeServer,
+  SocketIoRealtimePublisher,
+} from "./modules/realtime/realtime.server.js";
 import { PrismaRestaurantRepository } from "./modules/restaurants/restaurant.repository.js";
 import { RestaurantService } from "./modules/restaurants/restaurant.service.js";
 import { PrismaStaffRepository } from "./modules/staff/staff.repository.js";
@@ -36,6 +41,7 @@ const authService = new AuthService(
 const passwordHasher = new Argon2PasswordHasher();
 const menuImageDirectory = path.resolve(env.MENU_IMAGE_DIRECTORY);
 const orderRepository = new PrismaOrderRepository(prisma);
+const realtimePublisher = new SocketIoRealtimePublisher();
 const app = createApp({
   allowedOrigins: env.CORS_ORIGINS,
   authService,
@@ -60,18 +66,25 @@ const app = createApp({
     new PrismaTableRepository(prisma),
     env.PUBLIC_WEB_ORIGIN,
   ),
-  orderService: new OrderService(orderRepository),
+  orderService: new OrderService(orderRepository, realtimePublisher),
 });
 
-const server = app.listen(env.PORT, () => {
+const server = createServer(app);
+const realtimeServer = createRealtimeServer(server, {
+  allowedOrigins: env.CORS_ORIGINS,
+  authService,
+});
+realtimePublisher.attach(realtimeServer, authService);
+
+server.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, "RestroFlow API listening");
 });
 
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   logger.info({ signal }, "Shutting down");
-  server.close(() => {
-    void prisma.$disconnect().then(() => process.exit(0));
-  });
+  await realtimeServer.close();
+  await prisma.$disconnect();
+  process.exit(0);
 }
 
 process.on("SIGINT", () => void shutdown("SIGINT"));

@@ -8,7 +8,12 @@ export type SessionCookieOptions = {
 };
 
 export function readSessionToken(req: Request): string | undefined {
-  const header = req.headers.cookie;
+  return readSessionTokenFromCookieHeader(req.headers.cookie);
+}
+
+export function readSessionTokenFromCookieHeader(
+  header: string | undefined,
+): string | undefined {
   if (!header) return undefined;
 
   for (const segment of header.split(";")) {

@@ -1,4 +1,9 @@
-import type { OrderListQuery, OrderStatus } from "@restroflow/contracts";
+import type {
+  KitchenTicketListQuery,
+  OrderItemStatus,
+  OrderListQuery,
+  OrderStatus,
+} from "@restroflow/contracts";
 
 import type { Prisma, PrismaClient } from "../../generated/prisma/client.js";
 
@@ -141,6 +146,13 @@ export type OrderSummary = {
   version: number;
   totalMinor: number;
   maximumBatch: number;
+  items: { id: string; status: OrderItemStatus }[];
+};
+
+export type ItemStatusChange = {
+  itemId: string;
+  previousStatus: OrderItemStatus;
+  newStatus: OrderItemStatus;
 };
 
 export interface OrderTransaction {
@@ -194,8 +206,11 @@ export interface OrderTransaction {
     expectedVersion: number;
     totalMinor: number;
     items: OrderWriteItem[];
+    actorMembershipId: string;
+    previousStatus: OrderStatus;
+    newStatus: OrderStatus;
   }): Promise<OrderRecord | null>;
-  updateStatus(input: {
+  applyStatusChanges(input: {
     restaurantId: string;
     orderId: string;
     expectedVersion: number;
@@ -203,6 +218,7 @@ export interface OrderTransaction {
     newStatus: OrderStatus;
     actorMembershipId: string;
     reason: string | null;
+    itemChanges: ItemStatusChange[];
   }): Promise<OrderRecord | null>;
 }
 
@@ -219,7 +235,15 @@ export interface OrderRepository {
     restaurantId: string,
     query: OrderListQuery,
   ): Promise<{ records: OrderRecord[]; total: number }>;
+  listKitchenTickets(
+    restaurantId: string,
+    query: KitchenTicketListQuery,
+  ): Promise<OrderRecord[]>;
   findOrder(restaurantId: string, orderId: string): Promise<OrderRecord | null>;
+  findOrderIdByItem(
+    restaurantId: string,
+    itemId: string,
+  ): Promise<string | null>;
   listHistory(
     restaurantId: string,
     orderId: string,
@@ -281,15 +305,18 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
           status: true,
           version: true,
           totalMinor: true,
-          items: {
-            select: { batchNumber: true },
-            orderBy: { batchNumber: "desc" },
-            take: 1,
-          },
+          items: { select: { id: true, status: true, batchNumber: true } },
         },
       });
       return order
-        ? { ...order, maximumBatch: order.items[0]?.batchNumber ?? 0 }
+        ? {
+            ...order,
+            maximumBatch: Math.max(
+              0,
+              ...order.items.map((item) => item.batchNumber),
+            ),
+            items: order.items.map(({ id, status }) => ({ id, status })),
+          }
         : null;
     },
     lockOrder: async (restaurantId, orderId) => {
@@ -307,14 +334,17 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
           status: true,
           version: true,
           totalMinor: true,
-          items: {
-            select: { batchNumber: true },
-            orderBy: { batchNumber: "desc" },
-            take: 1,
-          },
+          items: { select: { id: true, status: true, batchNumber: true } },
         },
       });
-      return { ...order, maximumBatch: order.items[0]?.batchNumber ?? 0 };
+      return {
+        ...order,
+        maximumBatch: Math.max(
+          0,
+          ...order.items.map((item) => item.batchNumber),
+        ),
+        items: order.items.map(({ id, status }) => ({ id, status })),
+      };
     },
     findMenuItems: (restaurantId, menuItemIds) =>
       client.menuItem.findMany({
@@ -390,6 +420,7 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
         data: {
           version: { increment: 1 },
           totalMinor: { increment: input.totalMinor },
+          status: input.newStatus,
         },
       });
       if (updated.count === 0) return null;
@@ -418,6 +449,18 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
           });
         }
       }
+      if (input.previousStatus !== input.newStatus) {
+        await client.orderStatusHistory.create({
+          data: {
+            orderId: input.orderId,
+            restaurantId: input.restaurantId,
+            previousStatus: input.previousStatus,
+            newStatus: input.newStatus,
+            actorMembershipId: input.actorMembershipId,
+            reason: "New item batch added",
+          },
+        });
+      }
       return client.order.findUniqueOrThrow({
         where: {
           id_restaurantId: {
@@ -428,7 +471,7 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
         select: orderSelection,
       });
     },
-    updateStatus: async (input) => {
+    applyStatusChanges: async (input) => {
       const updated = await client.order.updateMany({
         where: {
           id: input.orderId,
@@ -439,16 +482,40 @@ function createTransaction(client: Prisma.TransactionClient): OrderTransaction {
         data: { status: input.newStatus, version: { increment: 1 } },
       });
       if (updated.count === 0) return null;
-      await client.orderStatusHistory.create({
-        data: {
-          orderId: input.orderId,
-          restaurantId: input.restaurantId,
-          previousStatus: input.previousStatus,
-          newStatus: input.newStatus,
-          actorMembershipId: input.actorMembershipId,
-          reason: input.reason,
-        },
-      });
+      for (const change of input.itemChanges) {
+        const item = await client.orderItem.updateMany({
+          where: {
+            id: change.itemId,
+            orderId: input.orderId,
+            restaurantId: input.restaurantId,
+            status: change.previousStatus,
+          },
+          data: { status: change.newStatus },
+        });
+        if (item.count === 0) return null;
+        await client.orderItemStatusHistory.create({
+          data: {
+            orderItemId: change.itemId,
+            restaurantId: input.restaurantId,
+            previousStatus: change.previousStatus,
+            newStatus: change.newStatus,
+            actorMembershipId: input.actorMembershipId,
+            reason: input.reason,
+          },
+        });
+      }
+      if (input.previousStatus !== input.newStatus) {
+        await client.orderStatusHistory.create({
+          data: {
+            orderId: input.orderId,
+            restaurantId: input.restaurantId,
+            previousStatus: input.previousStatus,
+            newStatus: input.newStatus,
+            actorMembershipId: input.actorMembershipId,
+            reason: input.reason,
+          },
+        });
+      }
       return client.order.findUniqueOrThrow({
         where: {
           id_restaurantId: {
@@ -507,11 +574,28 @@ export class PrismaOrderRepository implements OrderRepository {
     return { records, total };
   }
 
+  listKitchenTickets(restaurantId: string, query: KitchenTicketListQuery) {
+    return this.prisma.order.findMany({
+      where: { restaurantId, status: { in: query.statuses } },
+      select: orderSelection,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: query.limit,
+    });
+  }
+
   findOrder(restaurantId: string, orderId: string) {
     return this.prisma.order.findUnique({
       where: { id_restaurantId: { id: orderId, restaurantId } },
       select: orderSelection,
     });
+  }
+
+  async findOrderIdByItem(restaurantId: string, itemId: string) {
+    const item = await this.prisma.orderItem.findFirst({
+      where: { id: itemId, restaurantId },
+      select: { orderId: true },
+    });
+    return item?.orderId ?? null;
   }
 
   listHistory(restaurantId: string, orderId: string) {

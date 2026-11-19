@@ -10,6 +10,10 @@ const invariantMigration = new URL(
   "../../../prisma/migrations/20261119101000_add_order_invariants/migration.sql",
   import.meta.url,
 );
+const kitchenMigration = new URL(
+  "../../../prisma/migrations/20261119140000_add_kitchen_item_history/migration.sql",
+  import.meta.url,
+);
 
 describe("transactional order migrations", () => {
   it("backs idempotency and restaurant scope with database constraints", async () => {
@@ -27,5 +31,12 @@ describe("transactional order migrations", () => {
     expect(sql).toContain('CONSTRAINT "Order_totalMinor_check"');
     expect(sql).toContain('CONSTRAINT "OrderItem_quantity_check"');
     expect(sql).toContain('CONSTRAINT "IdempotencyKey_hash_check"');
+  });
+
+  it("scopes the item preparation audit trail to its restaurant", async () => {
+    const sql = await readFile(kitchenMigration, "utf8");
+    expect(sql).toContain('CREATE TABLE "OrderItemStatusHistory"');
+    expect(sql).toContain('FOREIGN KEY ("orderItemId", "restaurantId")');
+    expect(sql).toContain('REFERENCES "StaffMembership"("id", "restaurantId")');
   });
 });

@@ -2,7 +2,9 @@ import {
   idempotencyKeySchema,
   type AddOrderItemsRequest,
   type CreateOrderRequest,
+  type KitchenTicketListQuery,
   type OrderListQuery,
+  type UpdateOrderItemStatusRequest,
   type UpdateOrderStatusRequest,
 } from "@restroflow/contracts";
 import type { RequestHandler } from "express";
@@ -47,6 +49,14 @@ export class OrderController {
     res.status(200).json({ order });
   };
 
+  listKitchenTickets: RequestHandler = async (req, res) => {
+    const result = await this.service.listKitchenTickets(
+      this.scope(req).restaurantId,
+      req.query as unknown as KitchenTicketListQuery,
+    );
+    res.status(200).json(result);
+  };
+
   addItems: RequestHandler = async (req, res) => {
     const scope = this.scope(req);
     const order = await this.service.addItems(
@@ -67,6 +77,18 @@ export class OrderController {
       scope.role,
       req.params.id as string,
       req.body as UpdateOrderStatusRequest,
+    );
+    res.status(200).json({ order });
+  };
+
+  updateItemStatus: RequestHandler = async (req, res) => {
+    const scope = this.scope(req);
+    const order = await this.service.updateItemStatus(
+      scope.restaurantId,
+      scope.id,
+      scope.role,
+      req.params.id as string,
+      req.body as UpdateOrderItemStatusRequest,
     );
     res.status(200).json({ order });
   };

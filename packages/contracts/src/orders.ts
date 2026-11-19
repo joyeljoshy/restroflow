@@ -62,6 +62,30 @@ export const updateOrderStatusRequestSchema = z
   })
   .strict();
 
+export const updateOrderItemStatusRequestSchema = z
+  .object({
+    version: z.number().int().positive(),
+    status: orderItemStatusSchema,
+    reason: trimmed(1, 500).nullable().optional(),
+  })
+  .strict();
+
+export const kitchenTicketListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  statuses: z
+    .preprocess(
+      (value) =>
+        typeof value === "string"
+          ? value
+              .split(",")
+              .map((status) => status.trim())
+              .filter(Boolean)
+          : value,
+      z.array(orderStatusSchema).min(1).max(7),
+    )
+    .default(["PENDING", "ACCEPTED", "PREPARING", "READY"]),
+});
+
 export const orderListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -137,6 +161,9 @@ export const orderListResponseSchema = z.object({
     totalPages: z.number().int().nonnegative(),
   }),
 });
+export const kitchenTicketListResponseSchema = z.object({
+  orders: z.array(orderSchema),
+});
 export const orderHistoryResponseSchema = z.object({
   history: z.array(orderHistoryEntrySchema),
 });
@@ -149,6 +176,12 @@ export type CreateOrderRequest = z.infer<typeof createOrderRequestSchema>;
 export type AddOrderItemsRequest = z.infer<typeof addOrderItemsRequestSchema>;
 export type UpdateOrderStatusRequest = z.infer<
   typeof updateOrderStatusRequestSchema
+>;
+export type UpdateOrderItemStatusRequest = z.infer<
+  typeof updateOrderItemStatusRequestSchema
+>;
+export type KitchenTicketListQuery = z.infer<
+  typeof kitchenTicketListQuerySchema
 >;
 export type OrderListQuery = z.infer<typeof orderListQuerySchema>;
 export type Order = z.infer<typeof orderSchema>;

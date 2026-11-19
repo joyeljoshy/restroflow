@@ -15,12 +15,16 @@ import {
   Search,
   ShoppingBag,
   Trash2,
+  Utensils,
+  Wifi,
+  WifiOff,
   XCircle,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 
 import { useAuth } from "@/components/auth/auth-provider";
+import { useRealtimeStatus } from "@/components/realtime/realtime-provider";
 import { MenuItemImage } from "@/components/menu/menu-item-image";
 import { PriceDisplay } from "@/components/menu/price-display";
 import { Button } from "@/components/ui/button";
@@ -262,6 +266,7 @@ function ModifierDialog({
 
 export function WaiterPos() {
   const { user } = useAuth();
+  const realtimeStatus = useRealtimeStatus();
   const queryClient = useQueryClient();
   const membership = user?.memberships.find((candidate) =>
     ["ADMIN", "MANAGER", "WAITER"].includes(candidate.role),
@@ -391,6 +396,18 @@ export function WaiterPos() {
       await refreshOrders();
     },
   });
+  const serveOrder = useMutation({
+    mutationFn: (order: Order) =>
+      updateOrderStatus(restaurantId!, order.id, {
+        version: order.version,
+        status: "SERVED",
+        reason: "Served from waiter POS",
+      }),
+    onSuccess: async () => {
+      setNotice("Order recorded as served.");
+      await refreshOrders();
+    },
+  });
 
   if (tables.isPending || menu.isPending) {
     return (
@@ -425,16 +442,34 @@ export function WaiterPos() {
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-6">
-      <header>
-        <p className="text-primary text-xs font-bold tracking-[.16em] uppercase">
-          Waiter point of sale
-        </p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight">
-          Create an order
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          Select an active table session, customize menu items, and submit once.
-        </p>
+      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-primary text-xs font-bold tracking-[.16em] uppercase">
+            Waiter point of sale
+          </p>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight">
+            Create an order
+          </h1>
+          <p className="text-muted-foreground mt-2">
+            Select an active table session, customize menu items, and submit
+            once.
+          </p>
+        </div>
+        <span
+          className={cn(
+            "inline-flex w-fit items-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold",
+            realtimeStatus === "connected"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-amber-200 bg-amber-50 text-amber-900",
+          )}
+        >
+          {realtimeStatus === "connected" ? (
+            <Wifi className="size-4" />
+          ) : (
+            <WifiOff className="size-4" />
+          )}
+          {realtimeStatus === "connected" ? "Live updates" : "Reconnecting"}
+        </span>
       </header>
 
       {notice && (
@@ -790,25 +825,36 @@ export function WaiterPos() {
                       >
                         <History className="size-4" /> Details
                       </Button>
+                      {["PENDING", "ACCEPTED", "PREPARING", "READY"].includes(
+                        order.status,
+                      ) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setAddToOrderId(order.id)}
+                        >
+                          Add items
+                        </Button>
+                      )}
                       {(order.status === "PENDING" ||
                         order.status === "ACCEPTED") && (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setAddToOrderId(order.id)}
-                          >
-                            Add items
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={cancelOrder.isPending}
-                            onClick={() => cancelOrder.mutate(order)}
-                          >
-                            Cancel order
-                          </Button>
-                        </>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={cancelOrder.isPending}
+                          onClick={() => cancelOrder.mutate(order)}
+                        >
+                          Cancel order
+                        </Button>
+                      )}
+                      {order.status === "READY" && (
+                        <Button
+                          size="sm"
+                          disabled={serveOrder.isPending}
+                          onClick={() => serveOrder.mutate(order)}
+                        >
+                          <Utensils className="size-4" /> Mark served
+                        </Button>
                       )}
                     </div>
                   </div>
@@ -854,7 +900,7 @@ export function WaiterPos() {
                       <PriceDisplay amountMinor={item.lineTotalMinor} />
                     </div>
                     <p className="text-muted-foreground mt-1 text-xs">
-                      Batch {item.batchNumber}
+                      Batch {item.batchNumber} · {item.status}
                     </p>
                     {item.modifiers.length > 0 && (
                       <p className="text-muted-foreground mt-1 text-xs">

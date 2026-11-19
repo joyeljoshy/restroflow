@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { AuthenticatedUser, Role } from "@restroflow/contracts";
 import {
   errorResponseSchema,
+  kitchenTicketListResponseSchema,
   orderHistoryResponseSchema,
   orderListResponseSchema,
   orderResponseSchema,
@@ -18,6 +19,7 @@ import { createPrismaClient } from "../../lib/prisma.js";
 import type { AuthServiceContract } from "../auth/auth.service.js";
 import { PrismaOrderRepository } from "./order.repository.js";
 import { OrderService } from "./order.service.js";
+import type { RealtimePublisher } from "../realtime/realtime.publisher.js";
 import { PrismaTableRepository } from "../tables/table.repository.js";
 import { TableService } from "../tables/table.service.js";
 
@@ -59,7 +61,11 @@ run("transactional order API against PostgreSQL", () => {
     };
   }
 
-  function app(role: Role = "WAITER", scope = restaurantId) {
+  function app(
+    role: Role = "WAITER",
+    scope = restaurantId,
+    publisher?: RealtimePublisher,
+  ) {
     const orderRepository = new PrismaOrderRepository(prisma);
     return createApp({
       allowedOrigins: ["http://localhost:3000"],
@@ -77,7 +83,7 @@ run("transactional order API against PostgreSQL", () => {
         create: () => Promise.reject(new Error("unused")),
         update: () => Promise.reject(new Error("unused")),
       },
-      orderService: new OrderService(orderRepository),
+      orderService: new OrderService(orderRepository, publisher),
       tableService: new TableService(
         new PrismaTableRepository(prisma),
         "http://localhost:3000",
@@ -112,6 +118,9 @@ run("transactional order API against PostgreSQL", () => {
     await prisma.idempotencyKey.deleteMany({ where: { restaurantId } });
     await prisma.orderItemModifier.deleteMany({
       where: { orderItem: { restaurantId } },
+    });
+    await prisma.orderItemStatusHistory.deleteMany({
+      where: { restaurantId },
     });
     await prisma.orderStatusHistory.deleteMany({ where: { restaurantId } });
     await prisma.orderItem.deleteMany({ where: { restaurantId } });
@@ -460,6 +469,193 @@ run("transactional order API against PostgreSQL", () => {
     expect(orderListResponseSchema.parse(listing.body).orders).toHaveLength(1);
   });
 
+  it("runs the kitchen item workflow, aggregate readiness, audit history, and waiter service", async () => {
+    const order = await submit();
+    const tickets = await request(app("KITCHEN"))
+      .get("/api/v1/kitchen/tickets")
+      .expect(200);
+    expect(
+      kitchenTicketListResponseSchema.parse(tickets.body).orders,
+    ).toHaveLength(1);
+    await request(app("WAITER")).get("/api/v1/kitchen/tickets").expect(403);
+    const isolated = await request(app("KITCHEN", otherRestaurantId))
+      .get("/api/v1/kitchen/tickets")
+      .expect(200);
+    expect(isolated.body).toEqual({ orders: [] });
+
+    const acceptedResponse = await request(app("KITCHEN"))
+      .patch(`/api/v1/kitchen/orders/${order.id}/status`)
+      .send({ version: order.version, status: "ACCEPTED" })
+      .expect(200);
+    const accepted = orderResponseSchema.parse(acceptedResponse.body).order;
+    const preparingResponse = await request(app("KITCHEN"))
+      .patch(`/api/v1/kitchen/orders/${order.id}/status`)
+      .send({ version: accepted.version, status: "PREPARING" })
+      .expect(200);
+    const preparing = orderResponseSchema.parse(preparingResponse.body).order;
+    expect(preparing.items[0]?.status).toBe("PREPARING");
+
+    const readyResponse = await request(app("KITCHEN"))
+      .patch(`/api/v1/kitchen/items/${preparing.items[0]!.id}/status`)
+      .send({ version: preparing.version, status: "READY" })
+      .expect(200);
+    const ready = orderResponseSchema.parse(readyResponse.body).order;
+    expect(ready.status).toBe("READY");
+
+    const servedResponse = await request(app("WAITER"))
+      .patch(`/api/v1/orders/${order.id}/status`)
+      .send({ version: ready.version, status: "SERVED" })
+      .expect(200);
+    const served = orderResponseSchema.parse(servedResponse.body).order;
+    expect(served.items[0]?.status).toBe("SERVED");
+    const history = await request(app("MANAGER"))
+      .get(`/api/v1/orders/${order.id}/history`)
+      .expect(200);
+    expect(
+      orderHistoryResponseSchema
+        .parse(history.body)
+        .history.map((entry) => entry.newStatus),
+    ).toEqual(["PENDING", "ACCEPTED", "PREPARING", "READY", "SERVED"]);
+    expect(
+      await prisma.orderItemStatusHistory.count({
+        where: { restaurantId, orderItemId: preparing.items[0]!.id },
+      }),
+    ).toBe(3);
+  });
+
+  it("reopens a ready order for a new batch without resetting ready items", async () => {
+    const order = await submit();
+    const accept = orderResponseSchema.parse(
+      (
+        await request(app("KITCHEN"))
+          .patch(`/api/v1/orders/${order.id}/status`)
+          .send({ version: order.version, status: "ACCEPTED" })
+          .expect(200)
+      ).body,
+    ).order;
+    const preparing = orderResponseSchema.parse(
+      (
+        await request(app("KITCHEN"))
+          .patch(`/api/v1/orders/${order.id}/status`)
+          .send({ version: accept.version, status: "PREPARING" })
+          .expect(200)
+      ).body,
+    ).order;
+    const ready = orderResponseSchema.parse(
+      (
+        await request(app("KITCHEN"))
+          .patch(`/api/v1/orders/${order.id}/status`)
+          .send({ version: preparing.version, status: "READY" })
+          .expect(200)
+      ).body,
+    ).order;
+    const added = orderResponseSchema.parse(
+      (
+        await request(app("WAITER"))
+          .post(`/api/v1/orders/${order.id}/items`)
+          .set("idempotency-key", `ready-batch-${randomUUID()}`)
+          .send({
+            version: ready.version,
+            items: [{ menuItemId, quantity: 1, modifierIds: [modifierId] }],
+          })
+          .expect(200)
+      ).body,
+    ).order;
+    expect(added.status).toBe("PREPARING");
+    expect(added.items.map((item) => [item.batchNumber, item.status])).toEqual([
+      [1, "READY"],
+      [2, "PENDING"],
+    ]);
+
+    const second = added.items[1]!;
+    const started = orderResponseSchema.parse(
+      (
+        await request(app("KITCHEN"))
+          .patch(`/api/v1/kitchen/items/${second.id}/status`)
+          .send({ version: added.version, status: "PREPARING" })
+          .expect(200)
+      ).body,
+    ).order;
+    const completed = orderResponseSchema.parse(
+      (
+        await request(app("KITCHEN"))
+          .patch(`/api/v1/kitchen/items/${second.id}/status`)
+          .send({ version: started.version, status: "READY" })
+          .expect(200)
+      ).body,
+    ).order;
+    expect(completed.status).toBe("READY");
+    expect(completed.items[0]?.status).toBe("READY");
+  });
+
+  it("serializes concurrent item updates and protects cancelled orders", async () => {
+    const order = await submit();
+    const accepted = orderResponseSchema.parse(
+      (
+        await request(app("KITCHEN"))
+          .patch(`/api/v1/orders/${order.id}/status`)
+          .send({ version: order.version, status: "ACCEPTED" })
+          .expect(200)
+      ).body,
+    ).order;
+    const itemId = accepted.items[0]!.id;
+    const [left, right] = await Promise.all([
+      request(app("KITCHEN"))
+        .patch(`/api/v1/kitchen/items/${itemId}/status`)
+        .send({ version: accepted.version, status: "PREPARING" }),
+      request(app("KITCHEN"))
+        .patch(`/api/v1/kitchen/items/${itemId}/status`)
+        .send({ version: accepted.version, status: "PREPARING" }),
+    ]);
+    expect([left.status, right.status].sort()).toEqual([200, 409]);
+    const current = orderResponseSchema.parse(
+      (left.status === 200 ? left : right).body,
+    ).order;
+    const cancelled = orderResponseSchema.parse(
+      (
+        await request(app("MANAGER"))
+          .patch(`/api/v1/orders/${order.id}/status`)
+          .send({ version: current.version, status: "CANCELLED" })
+          .expect(200)
+      ).body,
+    ).order;
+    expect(cancelled.items[0]?.status).toBe("CANCELLED");
+    await request(app("KITCHEN"))
+      .patch(`/api/v1/kitchen/items/${itemId}/status`)
+      .send({ version: cancelled.version, status: "READY" })
+      .expect(409);
+  });
+
+  it("publishes only committed non-replayed changes", async () => {
+    const events: Parameters<RealtimePublisher["orderChanged"]>[0][] = [];
+    const publisher: RealtimePublisher = {
+      orderChanged: (event) => {
+        events.push(event);
+        return Promise.resolve();
+      },
+    };
+    const key = `published-${randomUUID()}`;
+    const firstResponse = await request(app("WAITER", restaurantId, publisher))
+      .post("/api/v1/orders")
+      .set("idempotency-key", key)
+      .send(orderPayload())
+      .expect(201);
+    await request(app("WAITER", restaurantId, publisher))
+      .post("/api/v1/orders")
+      .set("idempotency-key", key)
+      .send(orderPayload())
+      .expect(201);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ changeType: "CREATED", orderVersion: 1 });
+
+    const created = orderResponseSchema.parse(firstResponse.body).order;
+    await request(app("KITCHEN", restaurantId, publisher))
+      .patch(`/api/v1/orders/${created.id}/status`)
+      .send({ version: 999, status: "ACCEPTED" })
+      .expect(409);
+    expect(events).toHaveLength(1);
+  });
+
   it("blocks session closure until all orders are resolved", async () => {
     const order = await submit();
     const blocked = await request(app())
@@ -473,9 +669,19 @@ run("transactional order API against PostgreSQL", () => {
       .send({ version: order.version, status: "ACCEPTED" })
       .expect(200);
     const accepted = orderResponseSchema.parse(acceptedResponse.body).order;
-    await request(app("MANAGER"))
+    const preparingResponse = await request(app("KITCHEN"))
       .patch(`/api/v1/orders/${order.id}/status`)
-      .send({ version: accepted.version, status: "SERVED" })
+      .send({ version: accepted.version, status: "PREPARING" })
+      .expect(200);
+    const preparing = orderResponseSchema.parse(preparingResponse.body).order;
+    const readyResponse = await request(app("KITCHEN"))
+      .patch(`/api/v1/orders/${order.id}/status`)
+      .send({ version: preparing.version, status: "READY" })
+      .expect(200);
+    const ready = orderResponseSchema.parse(readyResponse.body).order;
+    await request(app("WAITER"))
+      .patch(`/api/v1/orders/${order.id}/status`)
+      .send({ version: ready.version, status: "SERVED" })
       .expect(200);
     await request(app())
       .post(`/api/v1/table-sessions/${sessionId}/close`)

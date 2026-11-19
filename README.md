@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 6 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff ordering, and a waiter POS. Billing, live kitchen workflows, customer ordering, and analytics are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 7 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff ordering, a waiter POS, and a real-time Kitchen Display System. Billing, customer ordering, inventory, and analytics are intentionally not implemented yet.
 
 ## Architecture
 
@@ -193,7 +193,23 @@ Part 6 staff order endpoints are mounted under `/api/v1`:
 - `PATCH /orders/:id/status`
 - `GET /orders/:id/history`
 
-Orders begin in `PENDING`. Part 6 permits intake transitions to `ACCEPTED`, `REJECTED`, or `CANCELLED`, followed by `SERVED` or `CANCELLED` from `ACCEPTED`; waiters may only cancel. Kitchen-specific `PREPARING` and `READY` operations are reserved for Part 7. `SERVED`, `CANCELLED`, and `REJECTED` are terminal. A table session cannot close while an order is `PENDING`, `ACCEPTED`, `PREPARING`, or `READY`.
+Orders normally move through `PENDING → ACCEPTED → PREPARING → READY → SERVED`. Kitchen item changes are audited and aggregated transactionally: all pending active items keep an accepted order at `ACCEPTED`, any preparing/ready mix produces `PREPARING`, and all active items ready produces `READY`. Cancelled items do not block readiness; an order with no active items becomes cancelled. `SERVED`, `CANCELLED`, and `REJECTED` are terminal. Waiters can serve ready orders and can cancel only pending or accepted orders. A table session cannot close while an order is `PENDING`, `ACCEPTED`, `PREPARING`, or `READY`.
+
+## Kitchen display and real-time synchronization
+
+Kitchen staff use `/kitchen` to view bounded, oldest-first tickets in New, Preparing, and Ready columns. Tickets render immutable item/modifier snapshots, instructions, batches, preparation age, and item status. Large touch actions accept or reject intake, start an entire ticket or one item, and mark items ready. Optional audio notifications require an explicit user action.
+
+Kitchen HTTP endpoints are mounted under `/api/v1/kitchen`:
+
+- `GET /tickets` and `GET /tickets/:id`
+- `PATCH /orders/:id/status`
+- `PATCH /items/:id/status`
+
+Order versions protect both order and item commands. Adding a batch to a ready order preserves earlier ready items, creates pending items in the next immutable batch, and moves the aggregate order back to preparing. Related item changes, aggregate order changes, versions, and histories commit in one PostgreSQL transaction.
+
+Socket.IO shares the API HTTP server and authenticates the same HTTP-only staff session cookie. Clients request only a channel name; the server derives and verifies the restaurant from the session before joining `restaurant:{restaurantId}:restaurant`, `restaurant:{restaurantId}:kitchen`, or `restaurant:{restaurantId}:waiters`. Kitchen rooms allow admin, manager, and kitchen roles; waiter rooms allow admin, manager, and waiter roles. Connections are periodically revalidated so revoked sessions, deactivated accounts, and role changes are disconnected.
+
+The server publishes a minimal versioned `order:changed` invalidation only after a successful transaction commits. An idempotent replay does not publish again. REST remains authoritative: clients deduplicate event IDs/versions, refetch after events and reconnects, and periodically reconcile the KDS. This MVP intentionally uses post-commit publication instead of an outbox, so a process failure in the narrow interval after commit can lose a notification; reconnect and periodic REST reads recover the state.
 
 ### Create the first development admin
 
@@ -222,7 +238,7 @@ npm test
 npm run build
 ```
 
-For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open a session, inspect its history, download or print its QR, and rotate the code. Sign in as a waiter, open `/waiter/pos`, select that active table, customize an item, submit it, refresh, and confirm the order remains. Add another item and verify it appears as a later batch without changing the first price snapshot. Confirm a repeated submission does not create a duplicate and that the session cannot close until its orders are served, cancelled, or rejected. Check tablet and desktop layouts, then call the health endpoint and verify `checks.database` is `up`.
+For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open a session, inspect its history, download or print its QR, and rotate the code. In one browser, sign in as a waiter at `/waiter/pos`; in another, sign in as kitchen staff at `/kitchen`. Submit an order and confirm the ticket appears without refreshing. Accept it, start preparation, mark items ready, and verify the waiter status updates. Mark it served from the POS. Repeat with a second batch added after the first is ready and confirm the first batch remains ready while the order returns to preparing. Briefly take one browser offline, change the order from the other, reconnect, and confirm authoritative state recovers. Confirm the table session cannot close until all orders are served, cancelled, or rejected. Check tablet and desktop layouts, then call the health endpoint and verify `checks.database` is `up`.
 
 ## Stopping local services
 

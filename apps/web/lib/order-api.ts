@@ -1,5 +1,6 @@
 import {
   orderHistoryResponseSchema,
+  kitchenTicketListResponseSchema,
   orderListResponseSchema,
   orderResponseSchema,
   type AddOrderItemsRequest,
@@ -7,6 +8,7 @@ import {
   type Order,
   type OrderHistoryEntry,
   type OrderListQuery,
+  type OrderItemStatus,
   type UpdateOrderStatusRequest,
 } from "@restroflow/contracts";
 
@@ -108,4 +110,45 @@ export async function fetchOrderHistory(
     `/api/v1/orders/${orderId}/history`,
   );
   return orderHistoryResponseSchema.parse(await response.json()).history;
+}
+
+export async function fetchKitchenTickets(
+  restaurantId: string,
+  statuses: Order["status"][] = ["PENDING", "ACCEPTED", "PREPARING", "READY"],
+) {
+  const params = new URLSearchParams({
+    limit: "100",
+    statuses: statuses.join(","),
+  });
+  const response = await orderRequest(
+    restaurantId,
+    `/api/v1/kitchen/tickets?${params.toString()}`,
+  );
+  return kitchenTicketListResponseSchema.parse(await response.json()).orders;
+}
+
+export async function updateKitchenOrderStatus(
+  restaurantId: string,
+  orderId: string,
+  input: UpdateOrderStatusRequest,
+) {
+  const response = await orderRequest(
+    restaurantId,
+    `/api/v1/kitchen/orders/${orderId}/status`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+  return orderResponseSchema.parse(await response.json()).order;
+}
+
+export async function updateKitchenItemStatus(
+  restaurantId: string,
+  itemId: string,
+  input: { version: number; status: OrderItemStatus; reason?: string },
+) {
+  const response = await orderRequest(
+    restaurantId,
+    `/api/v1/kitchen/items/${itemId}/status`,
+    { method: "PATCH", body: JSON.stringify(input) },
+  );
+  return orderResponseSchema.parse(await response.json()).order;
 }

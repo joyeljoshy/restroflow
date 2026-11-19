@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   addOrderItemsRequestSchema,
   createOrderRequestSchema,
+  kitchenTicketListQuerySchema,
   orderListQuerySchema,
+  updateOrderItemStatusRequestSchema,
   updateOrderStatusRequestSchema,
 } from "./orders";
 
@@ -51,11 +53,32 @@ describe("order contracts", () => {
         status: "ACCEPTED",
       }).success,
     ).toBe(true);
+    expect(
+      updateOrderItemStatusRequestSchema.safeParse({
+        version: 2,
+        status: "READY",
+      }).success,
+    ).toBe(true);
   });
 
   it("normalizes list pagination", () => {
     expect(
       orderListQuerySchema.parse({ page: "2", limit: "25" }),
     ).toMatchObject({ page: 2, limit: 25 });
+  });
+
+  it("bounds and normalizes kitchen status filters", () => {
+    expect(
+      kitchenTicketListQuerySchema.parse({
+        limit: "40",
+        statuses: "PENDING,PREPARING,READY",
+      }),
+    ).toEqual({
+      limit: 40,
+      statuses: ["PENDING", "PREPARING", "READY"],
+    });
+    expect(kitchenTicketListQuerySchema.safeParse({ limit: 101 }).success).toBe(
+      false,
+    );
   });
 });

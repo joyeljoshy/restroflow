@@ -1,9 +1,11 @@
 import {
   addOrderItemsRequestSchema,
   createOrderRequestSchema,
+  kitchenTicketListQuerySchema,
   orderListQuerySchema,
   orderParamsSchema,
   updateOrderStatusRequestSchema,
+  updateOrderItemStatusRequestSchema,
 } from "@restroflow/contracts";
 import { Router } from "express";
 
@@ -54,12 +56,42 @@ export function createOrderRouter(
   );
   router.patch(
     "/orders/:id/status",
-    requireRole("ADMIN", "MANAGER", "WAITER"),
+    requireRole("ADMIN", "MANAGER", "WAITER", "KITCHEN"),
     validateRequest({
       params: orderParamsSchema,
       body: updateOrderStatusRequestSchema,
     }),
     controller.updateStatus,
+  );
+  router.get(
+    "/kitchen/tickets",
+    requireRole("ADMIN", "MANAGER", "KITCHEN"),
+    validateRequest({ query: kitchenTicketListQuerySchema }),
+    controller.listKitchenTickets,
+  );
+  router.get(
+    "/kitchen/tickets/:id",
+    requireRole("ADMIN", "MANAGER", "KITCHEN"),
+    validateRequest({ params: orderParamsSchema }),
+    controller.getOrder,
+  );
+  router.patch(
+    "/kitchen/orders/:id/status",
+    requireRole("ADMIN", "MANAGER", "KITCHEN"),
+    validateRequest({
+      params: orderParamsSchema,
+      body: updateOrderStatusRequestSchema,
+    }),
+    controller.updateStatus,
+  );
+  router.patch(
+    "/kitchen/items/:id/status",
+    requireRole("ADMIN", "MANAGER", "KITCHEN"),
+    validateRequest({
+      params: orderParamsSchema,
+      body: updateOrderItemStatusRequestSchema,
+    }),
+    controller.updateItemStatus,
   );
   router.get(
     "/orders/:id/history",
