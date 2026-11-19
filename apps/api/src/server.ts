@@ -15,6 +15,8 @@ import { PrismaHealthRepository } from "./modules/health/health.repository.js";
 import { LocalMenuImageStorage } from "./modules/menu/menu-image.storage.js";
 import { PrismaMenuRepository } from "./modules/menu/menu.repository.js";
 import { MenuService } from "./modules/menu/menu.service.js";
+import { PrismaOrderRepository } from "./modules/orders/order.repository.js";
+import { OrderService } from "./modules/orders/order.service.js";
 import { PrismaRestaurantRepository } from "./modules/restaurants/restaurant.repository.js";
 import { RestaurantService } from "./modules/restaurants/restaurant.service.js";
 import { PrismaStaffRepository } from "./modules/staff/staff.repository.js";
@@ -33,6 +35,7 @@ const authService = new AuthService(
 );
 const passwordHasher = new Argon2PasswordHasher();
 const menuImageDirectory = path.resolve(env.MENU_IMAGE_DIRECTORY);
+const orderRepository = new PrismaOrderRepository(prisma);
 const app = createApp({
   allowedOrigins: env.CORS_ORIGINS,
   authService,
@@ -57,6 +60,7 @@ const app = createApp({
     new PrismaTableRepository(prisma),
     env.PUBLIC_WEB_ORIGIN,
   ),
+  orderService: new OrderService(orderRepository),
 });
 
 const server = app.listen(env.PORT, () => {

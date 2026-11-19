@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 5 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables, table sessions, and secure table QR management. Orders, billing, kitchen workflows, customer ordering, and analytics are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 6 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff ordering, and a waiter POS. Billing, live kitchen workflows, customer ordering, and analytics are intentionally not implemented yet.
 
 ## Architecture
 
@@ -179,6 +179,22 @@ Authenticated table endpoints are mounted directly under `/api/v1`:
 
 Each table has a cryptographically random QR identifier. Rotating it immediately replaces the stored identifier, invalidating earlier codes. QR payloads point at the reserved `/menu/table/:identifier` customer path, but Part 5 intentionally does not implement that public route or customer ordering. A QR identifies a table only; it does not authorize an order.
 
+## Transactional orders and waiter POS
+
+Waiters use `/waiter/pos` to select an open table session, browse the effectively available menu, configure modifiers, build a temporary cart, submit an order, inspect table order history, and add immutable item batches. TanStack Query owns authoritative menu, table, and order state; the Zustand cart contains draft UI state only.
+
+The API calculates every price from PostgreSQL and stores immutable item and modifier snapshots in integer minor units. Order creation and add-items commands require an `Idempotency-Key` header scoped to the restaurant and staff membership. A repeated key with the same request returns the stored response; a different request returns `409`. Status and add-item mutations use compare-and-increment order versions to prevent lost updates.
+
+Part 6 staff order endpoints are mounted under `/api/v1`:
+
+- `POST|GET /orders`
+- `GET /orders/:id`
+- `POST /orders/:id/items`
+- `PATCH /orders/:id/status`
+- `GET /orders/:id/history`
+
+Orders begin in `PENDING`. Part 6 permits intake transitions to `ACCEPTED`, `REJECTED`, or `CANCELLED`, followed by `SERVED` or `CANCELLED` from `ACCEPTED`; waiters may only cancel. Kitchen-specific `PREPARING` and `READY` operations are reserved for Part 7. `SERVED`, `CANCELLED`, and `REJECTED` are terminal. A table session cannot close while an order is `PENDING`, `ACCEPTED`, `PREPARING`, or `READY`.
+
 ### Create the first development admin
 
 The seed remains a read-only connectivity check unless every `ADMIN_SEED_*` variable is supplied. Admin creation is refused when `NODE_ENV=production`.
@@ -206,7 +222,7 @@ npm test
 npm run build
 ```
 
-For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open and close a session, inspect its history, download or print its QR, rotate the code, and verify the identifier changed. Sign in as a waiter and repeat the permitted session flow at `/waiter/tables`; confirm configuration and QR controls are absent. Verify an occupied table cannot be taken out of service, check mobile and desktop layouts, then call the health endpoint and verify `checks.database` is `up`.
+For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open a session, inspect its history, download or print its QR, and rotate the code. Sign in as a waiter, open `/waiter/pos`, select that active table, customize an item, submit it, refresh, and confirm the order remains. Add another item and verify it appears as a later batch without changing the first price snapshot. Confirm a repeated submission does not create a duplicate and that the session cannot close until its orders are served, cancelled, or rejected. Check tablet and desktop layouts, then call the health endpoint and verify `checks.database` is `up`.
 
 ## Stopping local services
 

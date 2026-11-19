@@ -13,6 +13,7 @@ import type {
 import QRCode from "qrcode";
 
 import { AppError } from "../../errors/app-error.js";
+import { unresolvedOrderStatuses } from "../orders/order.policy.js";
 import type {
   RestaurantTableRecord,
   TableRepository,
@@ -272,6 +273,27 @@ export class TableService implements TableServiceContract {
         "TABLE_SESSION_ALREADY_CLOSED",
         "This table session is already closed.",
       );
+    if (this.repository.closeSessionGuarded) {
+      const result = await this.repository.closeSessionGuarded(
+        restaurantId,
+        sessionId,
+        membershipId,
+        unresolvedOrderStatuses,
+      );
+      if (result.kind === "unresolved_orders")
+        throw new AppError(
+          409,
+          "TABLE_SESSION_HAS_UNRESOLVED_ORDERS",
+          "Resolve pending restaurant orders before closing this table session.",
+        );
+      if (result.kind === "not_open")
+        throw new AppError(
+          409,
+          "TABLE_SESSION_ALREADY_CLOSED",
+          "This table session is already closed.",
+        );
+      return toSession(result.session);
+    }
     const closed = await this.repository.closeSession(
       restaurantId,
       sessionId,

@@ -17,6 +17,8 @@ import { HealthService } from "./modules/health/health.service.js";
 import { MenuController } from "./modules/menu/menu.controller.js";
 import type { MenuImageStorage } from "./modules/menu/menu-image.storage.js";
 import type { MenuServiceContract } from "./modules/menu/menu.service.js";
+import { OrderController } from "./modules/orders/order.controller.js";
+import type { OrderServiceContract } from "./modules/orders/order.service.js";
 import { RestaurantController } from "./modules/restaurants/restaurant.controller.js";
 import type { RestaurantServiceContract } from "./modules/restaurants/restaurant.service.js";
 import { StaffController } from "./modules/staff/staff.controller.js";
@@ -38,6 +40,7 @@ type AppOptions = {
   menuImageStorage?: MenuImageStorage;
   menuImageDirectory?: string;
   tableService?: TableServiceContract;
+  orderService?: OrderServiceContract;
   version?: string;
 };
 
@@ -61,6 +64,9 @@ export function createApp(options: AppOptions) {
     : undefined;
   const tableController = options.tableService
     ? new TableController(options.tableService)
+    : undefined;
+  const orderController = options.orderService
+    ? new OrderController(options.orderService)
     : undefined;
 
   app.disable("x-powered-by");
@@ -119,6 +125,7 @@ export function createApp(options: AppOptions) {
       staffController,
       menuController,
       tableController,
+      orderController,
     ),
   );
   app.use(notFoundHandler);

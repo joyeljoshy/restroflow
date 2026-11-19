@@ -3,6 +3,7 @@ import type {
   TableListQuery,
   TableSessionListQuery,
   UpdateTableRequest,
+  OrderStatus,
 } from "@restroflow/contracts";
 
 import type { Prisma, PrismaClient } from "../../generated/prisma/client.js";
@@ -74,6 +75,16 @@ export interface TableRepository {
     sessionId: string,
     membershipId: string,
   ): Promise<TableSessionRecord | null>;
+  closeSessionGuarded?(
+    restaurantId: string,
+    sessionId: string,
+    membershipId: string,
+    blockingStatuses: readonly OrderStatus[],
+  ): Promise<
+    | { kind: "closed"; session: TableSessionRecord }
+    | { kind: "not_open" }
+    | { kind: "unresolved_orders" }
+  >;
 }
 
 const actorSelection = {
@@ -248,6 +259,51 @@ export class PrismaTableRepository implements TableRepository {
         where: { id_restaurantId: { id: sessionId, restaurantId } },
         select: sessionSelection,
       });
+    });
+  }
+
+  closeSessionGuarded(
+    restaurantId: string,
+    sessionId: string,
+    membershipId: string,
+    blockingStatuses: readonly OrderStatus[],
+  ) {
+    return this.prisma.$transaction(async (transaction) => {
+      const locked = await transaction.$queryRaw<{ id: string }[]>`
+          SELECT "id" FROM "TableSession"
+          WHERE "id" = ${sessionId}::uuid AND "restaurantId" = ${restaurantId}::uuid
+          FOR UPDATE
+        `;
+      if (locked.length === 0) return { kind: "not_open" } as const;
+      const session = await transaction.tableSession.findUniqueOrThrow({
+        where: { id_restaurantId: { id: sessionId, restaurantId } },
+        select: { status: true, closedAt: true },
+      });
+      if (session.status !== "OPEN" || session.closedAt)
+        return { kind: "not_open" } as const;
+      const unresolved = await transaction.order.count({
+        where: {
+          restaurantId,
+          tableSessionId: sessionId,
+          status: { in: [...blockingStatuses] },
+        },
+      });
+      if (unresolved > 0) return { kind: "unresolved_orders" } as const;
+      await transaction.tableSession.update({
+        where: { id_restaurantId: { id: sessionId, restaurantId } },
+        data: {
+          status: "CLOSED",
+          closedAt: new Date(),
+          closedByMembershipId: membershipId,
+        },
+      });
+      return {
+        kind: "closed",
+        session: await transaction.tableSession.findUniqueOrThrow({
+          where: { id_restaurantId: { id: sessionId, restaurantId } },
+          select: sessionSelection,
+        }),
+      } as const;
     });
   }
 }

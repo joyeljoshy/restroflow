@@ -47,7 +47,7 @@ const roleConfig = {
     label: "Waiter",
     items: [
       ["Service floor", "/waiter/tables", Armchair],
-      ["Orders", "/waiter#orders", ShoppingBag],
+      ["Order POS", "/waiter/pos", ShoppingBag],
     ],
   },
   cashier: {

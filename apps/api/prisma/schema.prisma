@@ -24,6 +24,34 @@ enum TableSessionStatus {
   CLOSED
 }
 
+enum OrderSource {
+  WAITER
+  CUSTOMER
+}
+
+enum OrderStatus {
+  PENDING
+  ACCEPTED
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+  REJECTED
+}
+
+enum OrderItemStatus {
+  PENDING
+  PREPARING
+  READY
+  SERVED
+  CANCELLED
+}
+
+enum IdempotencyOperation {
+  CREATE_ORDER
+  ADD_ORDER_ITEMS
+}
+
 model Restaurant {
   id                     String                  @id @default(uuid()) @db.Uuid
   name                   String
@@ -43,6 +71,9 @@ model Restaurant {
   menuItemModifierGroups MenuItemModifierGroup[]
   tables                 RestaurantTable[]
   tableSessions          TableSession[]
+  orders                 Order[]
+  orderItems             OrderItem[]
+  idempotencyKeys        IdempotencyKey[]
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
 }
@@ -79,6 +110,7 @@ model MenuItem {
   restaurant     Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
   category       MenuCategory            @relation(fields: [categoryId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   modifierGroups MenuItemModifierGroup[]
+  orderItems     OrderItem[]
   createdAt      DateTime                @default(now())
   updatedAt      DateTime                @updatedAt
 
@@ -88,17 +120,18 @@ model MenuItem {
 }
 
 model ModifierGroup {
-  id            String                  @id @default(uuid()) @db.Uuid
-  restaurantId  String                  @db.Uuid
-  name          String                  @db.VarChar(100)
-  minSelections Int                     @default(0)
-  maxSelections Int
-  isActive      Boolean                 @default(true)
-  restaurant    Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
-  modifiers     Modifier[]
-  menuItems     MenuItemModifierGroup[]
-  createdAt     DateTime                @default(now())
-  updatedAt     DateTime                @updatedAt
+  id                 String                  @id @default(uuid()) @db.Uuid
+  restaurantId       String                  @db.Uuid
+  name               String                  @db.VarChar(100)
+  minSelections      Int                     @default(0)
+  maxSelections      Int
+  isActive           Boolean                 @default(true)
+  restaurant         Restaurant              @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  modifiers          Modifier[]
+  menuItems          MenuItemModifierGroup[]
+  orderItemModifiers OrderItemModifier[]
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
 
   @@unique([restaurantId, name])
   @@unique([id, restaurantId])
@@ -106,14 +139,15 @@ model ModifierGroup {
 }
 
 model Modifier {
-  id              String        @id @default(uuid()) @db.Uuid
-  modifierGroupId String        @db.Uuid
-  name            String        @db.VarChar(100)
-  priceDeltaMinor Int           @default(0)
-  isAvailable     Boolean       @default(true)
-  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Restrict)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                 String              @id @default(uuid()) @db.Uuid
+  modifierGroupId    String              @db.Uuid
+  name               String              @db.VarChar(100)
+  priceDeltaMinor    Int                 @default(0)
+  isAvailable        Boolean             @default(true)
+  modifierGroup      ModifierGroup       @relation(fields: [modifierGroupId], references: [id], onDelete: Restrict)
+  orderItemModifiers OrderItemModifier[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@unique([modifierGroupId, name])
   @@index([modifierGroupId, isAvailable])
@@ -147,17 +181,20 @@ model User {
 }
 
 model StaffMembership {
-  id                  String         @id @default(uuid()) @db.Uuid
-  userId              String         @db.Uuid
-  restaurantId        String         @db.Uuid
+  id                  String               @id @default(uuid()) @db.Uuid
+  userId              String               @db.Uuid
+  restaurantId        String               @db.Uuid
   role                Role
-  isActive            Boolean        @default(true)
-  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  restaurant          Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  openedTableSessions TableSession[] @relation("TableSessionOpenedBy")
-  closedTableSessions TableSession[] @relation("TableSessionClosedBy")
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  isActive            Boolean              @default(true)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant          Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  openedTableSessions TableSession[]       @relation("TableSessionOpenedBy")
+  closedTableSessions TableSession[]       @relation("TableSessionClosedBy")
+  createdOrders       Order[]              @relation("OrderCreatedBy")
+  orderStatusHistory  OrderStatusHistory[] @relation("OrderStatusActor")
+  idempotencyKeys     IdempotencyKey[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@unique([userId, restaurantId])
   @@unique([id, restaurantId])
@@ -195,6 +232,7 @@ model TableSession {
   table                RestaurantTable    @relation(fields: [tableId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   openedBy             StaffMembership    @relation("TableSessionOpenedBy", fields: [openedByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
   closedBy             StaffMembership?   @relation("TableSessionClosedBy", fields: [closedByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  orders               Order[]
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
@@ -203,6 +241,112 @@ model TableSession {
   @@index([tableId, openedAt])
   @@index([openedByMembershipId])
   @@index([closedByMembershipId])
+}
+
+model Order {
+  id                    String               @id @default(uuid()) @db.Uuid
+  restaurantId          String               @db.Uuid
+  tableSessionId        String               @db.Uuid
+  orderNumber           String               @db.VarChar(32)
+  source                OrderSource          @default(WAITER)
+  status                OrderStatus          @default(PENDING)
+  version               Int                  @default(1)
+  totalMinor            Int
+  createdByMembershipId String               @db.Uuid
+  restaurant            Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  tableSession          TableSession         @relation(fields: [tableSessionId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  createdBy             StaffMembership      @relation("OrderCreatedBy", fields: [createdByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  items                 OrderItem[]
+  statusHistory         OrderStatusHistory[]
+  idempotencyKeys       IdempotencyKey[]
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+
+  @@unique([restaurantId, orderNumber])
+  @@unique([id, restaurantId])
+  @@index([restaurantId, status, createdAt])
+  @@index([tableSessionId, createdAt])
+  @@index([createdByMembershipId, createdAt])
+}
+
+model OrderItem {
+  id                  String              @id @default(uuid()) @db.Uuid
+  orderId             String              @db.Uuid
+  restaurantId        String              @db.Uuid
+  menuItemId          String              @db.Uuid
+  itemNameSnapshot    String              @db.VarChar(120)
+  quantity            Int
+  unitPriceMinor      Int
+  lineTotalMinor      Int
+  specialInstructions String?             @db.VarChar(500)
+  status              OrderItemStatus     @default(PENDING)
+  batchNumber         Int                 @default(1)
+  order               Order               @relation(fields: [orderId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  restaurant          Restaurant          @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  menuItem            MenuItem            @relation(fields: [menuItemId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  modifiers           OrderItemModifier[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  @@unique([id, orderId])
+  @@index([orderId, batchNumber, createdAt])
+  @@index([restaurantId, status, createdAt])
+  @@index([menuItemId])
+}
+
+model OrderItemModifier {
+  id                        String         @id @default(uuid()) @db.Uuid
+  orderItemId               String         @db.Uuid
+  modifierGroupId           String?        @db.Uuid
+  modifierId                String?        @db.Uuid
+  modifierGroupNameSnapshot String         @db.VarChar(100)
+  modifierNameSnapshot      String         @db.VarChar(100)
+  modifierPriceMinor        Int
+  quantity                  Int            @default(1)
+  orderItem                 OrderItem      @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  modifierGroup             ModifierGroup? @relation(fields: [modifierGroupId], references: [id], onDelete: SetNull)
+  modifier                  Modifier?      @relation(fields: [modifierId], references: [id], onDelete: SetNull)
+  createdAt                 DateTime       @default(now())
+
+  @@index([orderItemId])
+  @@index([modifierId])
+}
+
+model OrderStatusHistory {
+  id                String          @id @default(uuid()) @db.Uuid
+  orderId           String          @db.Uuid
+  restaurantId      String          @db.Uuid
+  previousStatus    OrderStatus?
+  newStatus         OrderStatus
+  actorMembershipId String          @db.Uuid
+  reason            String?         @db.VarChar(500)
+  order             Order           @relation(fields: [orderId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  actor             StaffMembership @relation("OrderStatusActor", fields: [actorMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  createdAt         DateTime        @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([restaurantId, newStatus, createdAt])
+  @@index([actorMembershipId, createdAt])
+}
+
+model IdempotencyKey {
+  id                String               @id @default(uuid()) @db.Uuid
+  restaurantId      String               @db.Uuid
+  actorMembershipId String               @db.Uuid
+  key               String               @db.VarChar(128)
+  operation         IdempotencyOperation
+  requestHash       String               @db.Char(64)
+  resultOrderId     String?              @db.Uuid
+  responseBody      Json?
+  createdAt         DateTime             @default(now())
+  expiresAt         DateTime
+  restaurant        Restaurant           @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  actor             StaffMembership      @relation(fields: [actorMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  resultOrder       Order?               @relation(fields: [resultOrderId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+
+  @@unique([restaurantId, actorMembershipId, key])
+  @@index([expiresAt])
+  @@index([resultOrderId])
 }
 
 model Session {

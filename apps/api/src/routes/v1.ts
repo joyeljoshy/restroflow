@@ -8,6 +8,8 @@ import type { HealthController } from "../modules/health/health.controller.js";
 import { createHealthRouter } from "../modules/health/health.routes.js";
 import type { MenuController } from "../modules/menu/menu.controller.js";
 import { createMenuRouter } from "../modules/menu/menu.routes.js";
+import type { OrderController } from "../modules/orders/order.controller.js";
+import { createOrderRouter } from "../modules/orders/order.routes.js";
 import type { RestaurantController } from "../modules/restaurants/restaurant.controller.js";
 import { createRestaurantRouter } from "../modules/restaurants/restaurant.routes.js";
 import type { StaffController } from "../modules/staff/staff.controller.js";
@@ -24,6 +26,7 @@ export function createV1Router(
   staffController: StaffController,
   menuController?: MenuController,
   tableController?: TableController,
+  orderController?: OrderController,
 ): Router {
   const router = Router();
   router.use(
@@ -53,6 +56,9 @@ export function createV1Router(
   }
   if (tableController) {
     router.use(createTableRouter(tableController, authService, cookieOptions));
+  }
+  if (orderController) {
+    router.use(createOrderRouter(orderController, authService, cookieOptions));
   }
   return router;
 }
