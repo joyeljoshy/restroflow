@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 4 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, and restaurant menu management. Table, order, billing, kitchen, customer QR, and analytics workflows are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 5 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables, table sessions, and secure table QR management. Orders, billing, kitchen workflows, customer ordering, and analytics are intentionally not implemented yet.
 
 ## Architecture
 
@@ -77,14 +77,15 @@ The health endpoint returns HTTP `200` when PostgreSQL is reachable and `503` wi
 
 API variables live in `apps/api/.env`:
 
-| Variable               | Purpose                                    | Example                     |
-| ---------------------- | ------------------------------------------ | --------------------------- |
-| `NODE_ENV`             | Runtime mode                               | `development`               |
-| `PORT`                 | API port                                   | `4000`                      |
-| `LOG_LEVEL`            | Pino log level                             | `info`                      |
-| `CORS_ORIGINS`         | Comma-separated trusted web origins        | `http://localhost:3000`     |
-| `DATABASE_URL`         | Server-only PostgreSQL connection URL      | See `apps/api/.env.example` |
-| `MENU_IMAGE_DIRECTORY` | Local menu image directory for development | `uploads/menu`              |
+| Variable               | Purpose                                      | Example                     |
+| ---------------------- | -------------------------------------------- | --------------------------- |
+| `NODE_ENV`             | Runtime mode                                 | `development`               |
+| `PORT`                 | API port                                     | `4000`                      |
+| `LOG_LEVEL`            | Pino log level                               | `info`                      |
+| `CORS_ORIGINS`         | Comma-separated trusted web origins          | `http://localhost:3000`     |
+| `PUBLIC_WEB_ORIGIN`    | Public web origin embedded in table QR codes | `http://localhost:3000`     |
+| `DATABASE_URL`         | Server-only PostgreSQL connection URL        | See `apps/api/.env.example` |
+| `MENU_IMAGE_DIRECTORY` | Local menu image directory for development   | `uploads/menu`              |
 
 To point the browser at a non-default API, set `NEXT_PUBLIC_API_URL` for the web workspace. Never place credentials in a `NEXT_PUBLIC_*` variable.
 
@@ -163,6 +164,21 @@ Authenticated menu endpoints are mounted under `/api/v1/menu`:
 
 The image endpoint accepts raw JPEG, PNG, or WebP files up to 3 MB and stores only a generated stable reference in PostgreSQL. The default local filesystem adapter is development-safe: filenames are server-generated UUIDs and paths are never taken from the client. Local files are not durable across ephemeral or multi-instance deployments, so production deployments must mount persistent shared storage or replace this adapter with object storage before relying on uploads. No cloud credentials are included or inferred.
 
+## Table and QR management
+
+Administrators manage tables at `/admin/tables`; managers can view tables and change permitted operational states. Waiters use `/waiter/tables` to see live availability and open or close dining sessions. Kitchen access is read-only, while cashiers can view active sessions through the API.
+
+Occupancy is derived from an open `TableSession`; it is not stored as a second mutable state. PostgreSQL enforces one open session per table with a partial unique index, and session status/date constraints keep open and closed records consistent. Tables are taken out of service instead of deleted, and closed sessions remain historical records.
+
+Authenticated table endpoints are mounted directly under `/api/v1`:
+
+- `GET|POST /tables`, `GET|PATCH|DELETE /tables/:id`
+- `POST|GET /tables/:id/sessions`
+- `GET /table-sessions/:id`, `POST /table-sessions/:id/close`
+- `GET /tables/:id/qr`, `POST /tables/:id/qr/rotate`
+
+Each table has a cryptographically random QR identifier. Rotating it immediately replaces the stored identifier, invalidating earlier codes. QR payloads point at the reserved `/menu/table/:identifier` customer path, but Part 5 intentionally does not implement that public route or customer ordering. A QR identifies a table only; it does not authorize an order.
+
 ### Create the first development admin
 
 The seed remains a read-only connectivity check unless every `ADMIN_SEED_*` variable is supplied. Admin creation is refused when `NODE_ENV=production`.
@@ -190,7 +206,7 @@ npm test
 npm run build
 ```
 
-For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. Deactivate the category and confirm its items show as effectively unavailable without being deleted. Confirm the deactivated staff account cannot reuse an existing session, verify a sole active admin cannot be demoted or deactivated, and check the layouts at mobile and desktop widths. Finally call the health endpoint and verify `checks.database` is `up`.
+For a manual smoke test, sign in as the development admin, update and reload `/admin/settings`, then create, edit, deactivate, and reactivate a non-admin account in `/admin/staff`. Open `/admin/menu`, create a category, add an item, assign a modifier group, upload an image, change availability, and reload to confirm persistence. At `/admin/tables`, create and edit a table, open and close a session, inspect its history, download or print its QR, rotate the code, and verify the identifier changed. Sign in as a waiter and repeat the permitted session flow at `/waiter/tables`; confirm configuration and QR controls are absent. Verify an occupied table cannot be taken out of service, check mobile and desktop layouts, then call the health endpoint and verify `checks.database` is `up`.
 
 ## Stopping local services
 

@@ -4,3 +4,4 @@ export * from "./http";
 export * from "./menu";
 export * from "./restaurant";
 export * from "./staff";
+export * from "./tables";

@@ -39,6 +39,7 @@ const adminUser: AuthUserRecord = {
   isActive: true,
   memberships: [
     {
+      id: "97a2cbe2-5761-4b1d-8e30-3c4f5b4e766e",
       restaurantId,
       restaurantName: "RestroFlow Demo",
       role: "ADMIN",
@@ -253,7 +254,13 @@ function buildAuthorizationApp(auth: AuthenticatedUser) {
     login: () => Promise.reject(new Error("Not used")),
     logout: () => Promise.resolve(),
     authenticate: () =>
-      Promise.resolve({ user: auth, sessionTokenHash: "token-hash" }),
+      Promise.resolve({
+        user: auth,
+        sessionTokenHash: "token-hash",
+        membershipIds: {
+          [restaurantId]: "97a2cbe2-5761-4b1d-8e30-3c4f5b4e766e",
+        },
+      }),
   };
   const app = express();
   app.get(

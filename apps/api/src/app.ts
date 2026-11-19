@@ -21,6 +21,8 @@ import { RestaurantController } from "./modules/restaurants/restaurant.controlle
 import type { RestaurantServiceContract } from "./modules/restaurants/restaurant.service.js";
 import { StaffController } from "./modules/staff/staff.controller.js";
 import type { StaffServiceContract } from "./modules/staff/staff.service.js";
+import { TableController } from "./modules/tables/table.controller.js";
+import type { TableServiceContract } from "./modules/tables/table.service.js";
 import { createV1Router } from "./routes/v1.js";
 
 type AppOptions = {
@@ -35,6 +37,7 @@ type AppOptions = {
   menuService?: MenuServiceContract;
   menuImageStorage?: MenuImageStorage;
   menuImageDirectory?: string;
+  tableService?: TableServiceContract;
   version?: string;
 };
 
@@ -55,6 +58,9 @@ export function createApp(options: AppOptions) {
   const staffController = new StaffController(options.staffService);
   const menuController = options.menuService
     ? new MenuController(options.menuService, options.menuImageStorage)
+    : undefined;
+  const tableController = options.tableService
+    ? new TableController(options.tableService)
     : undefined;
 
   app.disable("x-powered-by");
@@ -112,6 +118,7 @@ export function createApp(options: AppOptions) {
       restaurantController,
       staffController,
       menuController,
+      tableController,
     ),
   );
   app.use(notFoundHandler);

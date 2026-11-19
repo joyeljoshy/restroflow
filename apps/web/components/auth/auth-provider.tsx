@@ -21,7 +21,7 @@ export function homeForRole(role: Role): string {
     case "KITCHEN":
       return "/kitchen";
     case "WAITER":
-      return "/waiter";
+      return "/waiter/tables";
     case "CASHIER":
       return "/cashier";
   }

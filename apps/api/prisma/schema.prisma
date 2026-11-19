@@ -19,6 +19,11 @@ enum Role {
   CASHIER
 }
 
+enum TableSessionStatus {
+  OPEN
+  CLOSED
+}
+
 model Restaurant {
   id                     String                  @id @default(uuid()) @db.Uuid
   name                   String
@@ -36,6 +41,8 @@ model Restaurant {
   menuItems              MenuItem[]
   modifierGroups         ModifierGroup[]
   menuItemModifierGroups MenuItemModifierGroup[]
+  tables                 RestaurantTable[]
+  tableSessions          TableSession[]
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
 }
@@ -140,18 +147,62 @@ model User {
 }
 
 model StaffMembership {
-  id           String     @id @default(uuid()) @db.Uuid
-  userId       String     @db.Uuid
-  restaurantId String     @db.Uuid
-  role         Role
-  isActive     Boolean    @default(true)
-  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id                  String         @id @default(uuid()) @db.Uuid
+  userId              String         @db.Uuid
+  restaurantId        String         @db.Uuid
+  role                Role
+  isActive            Boolean        @default(true)
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant          Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  openedTableSessions TableSession[] @relation("TableSessionOpenedBy")
+  closedTableSessions TableSession[] @relation("TableSessionClosedBy")
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   @@unique([userId, restaurantId])
+  @@unique([id, restaurantId])
   @@index([restaurantId, role])
+}
+
+model RestaurantTable {
+  id           String         @id @default(uuid()) @db.Uuid
+  restaurantId String         @db.Uuid
+  tableNumber  String         @db.VarChar(30)
+  displayName  String         @db.VarChar(100)
+  capacity     Int
+  isActive     Boolean        @default(true)
+  qrIdentifier String         @unique @db.VarChar(64)
+  restaurant   Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  sessions     TableSession[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([restaurantId, tableNumber])
+  @@unique([id, restaurantId])
+  @@index([restaurantId, isActive, tableNumber])
+}
+
+model TableSession {
+  id                   String             @id @default(uuid()) @db.Uuid
+  restaurantId         String             @db.Uuid
+  tableId              String             @db.Uuid
+  status               TableSessionStatus @default(OPEN)
+  openedAt             DateTime           @default(now())
+  closedAt             DateTime?
+  openedByMembershipId String             @db.Uuid
+  closedByMembershipId String?            @db.Uuid
+  restaurant           Restaurant         @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  table                RestaurantTable    @relation(fields: [tableId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  openedBy             StaffMembership    @relation("TableSessionOpenedBy", fields: [openedByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  closedBy             StaffMembership?   @relation("TableSessionClosedBy", fields: [closedByMembershipId, restaurantId], references: [id, restaurantId], onDelete: Restrict)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@unique([id, restaurantId])
+  @@index([restaurantId, status, openedAt])
+  @@index([tableId, openedAt])
+  @@index([openedByMembershipId])
+  @@index([closedByMembershipId])
 }
 
 model Session {

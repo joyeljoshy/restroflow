@@ -273,7 +273,14 @@ function authService(role: Role, scope = restaurantId): AuthServiceContract {
   return {
     login: () => Promise.reject(new Error("Not used")),
     logout: () => Promise.resolve(),
-    authenticate: () => Promise.resolve({ user, sessionTokenHash: "hash" }),
+    authenticate: () =>
+      Promise.resolve({
+        user,
+        sessionTokenHash: "hash",
+        membershipIds: {
+          [scope]: "97a2cbe2-5761-4b1d-8e30-3c4f5b4e766e",
+        },
+      }),
   };
 }
 

@@ -38,7 +38,10 @@ export const requireRestaurantAccess: RequestHandler = (req, _res, next) => {
     return;
   }
 
-  req.restaurantAccess = membership;
+  req.restaurantAccess = {
+    ...membership,
+    id: req.auth.membershipIds[membership.restaurantId]!,
+  };
   next();
 };
 
@@ -60,13 +63,16 @@ export const resolveSessionRestaurant: RequestHandler = (req, _res, next) => {
           : "RESTAURANT_CONTEXT_REQUIRED",
         requestedId
           ? "You do not have access to this restaurant."
-          : "Select a restaurant before accessing its menu.",
+          : "Select a restaurant before accessing this resource.",
       ),
     );
     return;
   }
 
-  req.restaurantAccess = membership;
+  req.restaurantAccess = {
+    ...membership,
+    id: req.auth.membershipIds[membership.restaurantId]!,
+  };
   next();
 };
 

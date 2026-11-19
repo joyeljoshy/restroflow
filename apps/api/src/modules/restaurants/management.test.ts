@@ -222,7 +222,12 @@ function authService(role: Role, scopedRestaurantId = restaurantId) {
   const service: AuthServiceContract = {
     login: () => Promise.reject(new Error("Not used")),
     logout: () => Promise.resolve(),
-    authenticate: () => Promise.resolve({ user, sessionTokenHash: "hash" }),
+    authenticate: () =>
+      Promise.resolve({
+        user,
+        sessionTokenHash: "hash",
+        membershipIds: { [scopedRestaurantId]: adminStaffId },
+      }),
   };
   return service;
 }
@@ -332,6 +337,7 @@ describe("restaurant and staff management API", () => {
                 isActive: staff.userActive.get(record.userId) ?? false,
                 memberships: [
                   {
+                    id: record.id,
                     restaurantId,
                     restaurantName: "RestroFlow Demo",
                     role: record.role,

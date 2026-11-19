@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Armchair,
   BarChart3,
   Bell,
   ChefHat,
@@ -29,6 +30,7 @@ const roleConfig = {
     items: [
       ["Overview", "/admin", LayoutDashboard],
       ["Menu", "/admin/menu", ShoppingBag],
+      ["Tables", "/admin/tables", Armchair],
       ["Team", "/admin/staff", Users],
       ["Analytics", "/admin#analytics", BarChart3],
       ["Settings", "/admin/settings", Settings],
@@ -44,7 +46,7 @@ const roleConfig = {
   waiter: {
     label: "Waiter",
     items: [
-      ["Service floor", "/waiter", LayoutDashboard],
+      ["Service floor", "/waiter/tables", Armchair],
       ["Orders", "/waiter#orders", ShoppingBag],
     ],
   },

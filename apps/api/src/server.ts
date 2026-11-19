@@ -19,6 +19,8 @@ import { PrismaRestaurantRepository } from "./modules/restaurants/restaurant.rep
 import { RestaurantService } from "./modules/restaurants/restaurant.service.js";
 import { PrismaStaffRepository } from "./modules/staff/staff.repository.js";
 import { StaffService } from "./modules/staff/staff.service.js";
+import { PrismaTableRepository } from "./modules/tables/table.repository.js";
+import { TableService } from "./modules/tables/table.service.js";
 
 const env = loadEnvironment();
 const logger = createLogger(env.LOG_LEVEL);
@@ -51,6 +53,10 @@ const app = createApp({
   menuService: new MenuService(new PrismaMenuRepository(prisma)),
   menuImageStorage: new LocalMenuImageStorage(menuImageDirectory),
   menuImageDirectory,
+  tableService: new TableService(
+    new PrismaTableRepository(prisma),
+    env.PUBLIC_WEB_ORIGIN,
+  ),
 });
 
 const server = app.listen(env.PORT, () => {

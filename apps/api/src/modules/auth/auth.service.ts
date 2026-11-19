@@ -16,6 +16,7 @@ const INVALID_CREDENTIAL_PASSWORD_HASH =
 export type AuthSession = {
   user: AuthenticatedUser;
   sessionTokenHash: string;
+  membershipIds: Record<string, string>;
 };
 
 export interface AuthServiceContract {
@@ -58,7 +59,9 @@ function toAuthenticatedUser(user: AuthUserRecord): AuthenticatedUser {
     email: user.email,
     displayName: user.displayName,
     memberships: user.memberships.map((membership): StaffMembership => ({
-      ...membership,
+      restaurantId: membership.restaurantId,
+      restaurantName: membership.restaurantName,
+      role: membership.role,
     })),
   };
 }
@@ -121,6 +124,12 @@ export class AuthService implements AuthServiceContract {
     return {
       user: toAuthenticatedUser(session.user),
       sessionTokenHash: tokenHash,
+      membershipIds: Object.fromEntries(
+        session.user.memberships.map((membership) => [
+          membership.restaurantId,
+          membership.id,
+        ]),
+      ),
     };
   }
 

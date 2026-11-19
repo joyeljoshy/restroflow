@@ -4,9 +4,9 @@ export default function WaiterPage() {
     <WorkspacePlaceholder
       eyebrow="Dining room"
       title="Service floor"
-      description="Table sessions and point-of-sale ordering will be added after their secure backend foundations are requested."
+      description="Live table sessions are available from Service floor. Point-of-sale ordering remains intentionally out of scope."
       metrics={[
-        { label: "My tables", value: "—", note: "Waiting for table sessions" },
+        { label: "Tables", value: "Ready", note: "Open the Service floor" },
         {
           label: "Open orders",
           value: "—",

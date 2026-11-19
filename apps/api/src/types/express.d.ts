@@ -7,7 +7,7 @@ declare global {
     interface Request {
       id: string;
       auth: AuthSession;
-      restaurantAccess?: StaffMembership;
+      restaurantAccess?: StaffMembership & { id: string };
     }
   }
 }

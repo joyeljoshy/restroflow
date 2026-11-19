@@ -3,6 +3,7 @@ import type { Role } from "@restroflow/contracts";
 import type { PrismaClient } from "../../generated/prisma/client.js";
 
 export type AuthMembershipRecord = {
+  id: string;
   restaurantId: string;
   restaurantName: string;
   role: Role;
@@ -44,6 +45,7 @@ const userSelection = {
   memberships: {
     where: { isActive: true },
     select: {
+      id: true,
       restaurantId: true,
       role: true,
       restaurant: { select: { name: true } },
@@ -58,6 +60,7 @@ type SelectedUser = {
   passwordHash: string;
   isActive: boolean;
   memberships: {
+    id: string;
     restaurantId: string;
     role: Role;
     restaurant: { name: string };
@@ -72,6 +75,7 @@ function toAuthUser(user: SelectedUser): AuthUserRecord {
     passwordHash: user.passwordHash,
     isActive: user.isActive,
     memberships: user.memberships.map((membership) => ({
+      id: membership.id,
       restaurantId: membership.restaurantId,
       restaurantName: membership.restaurant.name,
       role: membership.role,

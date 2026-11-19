@@ -11,6 +11,8 @@ import { createMenuRouter } from "../modules/menu/menu.routes.js";
 import type { RestaurantController } from "../modules/restaurants/restaurant.controller.js";
 import { createRestaurantRouter } from "../modules/restaurants/restaurant.routes.js";
 import type { StaffController } from "../modules/staff/staff.controller.js";
+import type { TableController } from "../modules/tables/table.controller.js";
+import { createTableRouter } from "../modules/tables/table.routes.js";
 
 export function createV1Router(
   healthController: HealthController,
@@ -21,6 +23,7 @@ export function createV1Router(
   restaurantController: RestaurantController,
   staffController: StaffController,
   menuController?: MenuController,
+  tableController?: TableController,
 ): Router {
   const router = Router();
   router.use(
@@ -47,6 +50,9 @@ export function createV1Router(
       "/menu",
       createMenuRouter(menuController, authService, cookieOptions),
     );
+  }
+  if (tableController) {
+    router.use(createTableRouter(tableController, authService, cookieOptions));
   }
   return router;
 }
