@@ -169,7 +169,7 @@ test.describe("live customer browser to kitchen flow", () => {
     const httpToClose = httpServer;
     if (realtimeToClose && httpToClose?.listening)
       await new Promise<void>((resolve, reject) => {
-        void realtimeToClose.close((error) =>
+        void realtimeToClose.close((error?: Error) =>
           error ? reject(error) : resolve(),
         );
       });

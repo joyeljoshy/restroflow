@@ -40,6 +40,12 @@ export type PaymentSummaryRow = {
   periodOutstandingMinor: bigint;
 };
 
+export type PaymentAnalyticsRows = {
+  summary: PaymentSummaryRow;
+  methods: PaymentMethodRow[];
+  points: TrendRow[];
+};
+
 export type PopularItemRow = {
   menuItemId: string;
   itemName: string;
@@ -105,11 +111,7 @@ export interface AnalyticsRepository {
     startDate: string,
     endDate: string,
     granularity: string,
-  ): Promise<{
-    summary: PaymentSummaryRow;
-    methods: PaymentMethodRow[];
-    points: TrendRow[];
-  }>;
+  ): Promise<PaymentAnalyticsRows>;
   popularItems(
     restaurantId: string,
     timezone: string,
@@ -237,7 +239,7 @@ export class PrismaAnalyticsRepository implements AnalyticsRepository {
     startDate: string,
     endDate: string,
     granularity: string,
-  ) {
+  ): Promise<PaymentAnalyticsRows> {
     const [summaryRows, methods, points] = await Promise.all([
       this.prisma.$queryRaw<PaymentSummaryRow[]>`
         WITH bounds AS (SELECT

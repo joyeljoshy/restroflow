@@ -9,5 +9,5 @@
     "types": ["node", "vitest/globals"]
   },
   "include": ["next-env.d.ts", ".next/types/**/*.ts", "**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "e2e"]
 }
