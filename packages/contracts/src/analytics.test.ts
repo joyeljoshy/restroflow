@@ -4,7 +4,7 @@ import {
   analyticsMoneySchema,
   analyticsRangeQuerySchema,
   popularItemsQuerySchema,
-} from "./analytics";
+} from "./analytics.js";
 
 describe("analytics contracts", () => {
   it("accepts an inclusive-start/exclusive-end range", () => {

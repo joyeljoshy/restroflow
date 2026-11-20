@@ -4,7 +4,7 @@ import {
   activateCustomerSessionRequestSchema,
   customerCreateOrderRequestSchema,
   customerOrderChangedEventSchema,
-} from "./index";
+} from "./index.js";
 
 describe("customer ordering contracts", () => {
   it("accepts bounded activation input and rejects leaked extra fields", () => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { roleSchema } from "./auth";
+import { roleSchema } from "./auth.js";
 
 export const staffIdParamsSchema = z.object({
   restaurantId: z.uuid(),

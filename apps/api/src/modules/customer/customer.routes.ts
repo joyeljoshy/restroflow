@@ -9,6 +9,7 @@ import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 
 import { validateRequest } from "../../middleware/validate-request.js";
+import { requireTrustedOrigin } from "../../middleware/trusted-origin.js";
 import {
   requireAuth,
   requireRole,
@@ -17,10 +18,7 @@ import {
 import type { SessionCookieOptions } from "../auth/auth.cookies.js";
 import type { AuthServiceContract } from "../auth/auth.service.js";
 import type { CustomerController } from "./customer.controller.js";
-import {
-  requireCustomerSession,
-  requireTrustedOrigin,
-} from "./customer.middleware.js";
+import { requireCustomerSession } from "./customer.middleware.js";
 import type { CustomerServiceContract } from "./customer.service.js";
 
 export function createCustomerRouter(

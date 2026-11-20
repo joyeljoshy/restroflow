@@ -8,6 +8,7 @@ import type { Logger } from "pino";
 
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFoundHandler } from "./middleware/not-found.js";
+import { requireTrustedOrigin } from "./middleware/trusted-origin.js";
 import { AnalyticsController } from "./modules/analytics/analytics.controller.js";
 import type { AnalyticsServiceContract } from "./modules/analytics/analytics.service.js";
 import { AuthController } from "./modules/auth/auth.controller.js";
@@ -138,6 +139,7 @@ export function createApp(options: AppOptions) {
 
   app.use(
     "/api/v1",
+    requireTrustedOrigin(options.allowedOrigins),
     createV1Router(
       healthController,
       authController,

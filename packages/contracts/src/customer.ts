@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { publicMenuResponseSchema } from "./menu";
-import { orderSchema } from "./orders";
+import { publicMenuResponseSchema } from "./menu.js";
+import { orderSchema } from "./orders.js";
 
 const id = z.uuid();
 const trimmed = (minimum: number, maximum: number) =>

@@ -157,15 +157,20 @@ async function setupCustomer() {
   };
 }
 
-function client(url: string, token: string | undefined, restaurantId: string) {
+function client(
+  url: string,
+  token: string | undefined,
+  restaurantId: string,
+  origin = "http://localhost:3000",
+) {
   const socket = createClient(url, {
     auth: { restaurantId },
     extraHeaders: token
       ? {
           cookie: `restroflow_session=${token}`,
-          origin: "http://localhost:3000",
+          origin,
         }
-      : { origin: "http://localhost:3000" },
+      : { origin },
     forceNew: true,
     reconnection: false,
   });
@@ -203,6 +208,20 @@ function subscribe(socket: ClientSocket, channel: string) {
 }
 
 describe("authenticated Socket.IO rooms", () => {
+  it("rejects cross-origin WebSocket handshakes before authentication", async () => {
+    const context = await setup();
+    const socket = client(
+      context.url,
+      "kitchen-one",
+      restaurantOne,
+      "http://attacker.localhost:3001",
+    );
+    await expect(
+      new Promise<Error>((resolve) => socket.once("connect_error", resolve)),
+    ).resolves.toBeInstanceOf(Error);
+    expect(socket.connected).toBe(false);
+  });
+
   it("rejects missing sessions and unauthorized kitchen subscriptions", async () => {
     const context = await setup();
     const missing = client(context.url, undefined, restaurantOne);

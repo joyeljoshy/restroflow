@@ -16,14 +16,20 @@ if (!process.env.DATABASE_URL) {
 
 import { createApp } from "../../api/src/app.js";
 import { createPrismaClient } from "../../api/src/lib/prisma.js";
+import { PrismaAnalyticsRepository } from "../../api/src/modules/analytics/analytics.repository.js";
+import { AnalyticsService } from "../../api/src/modules/analytics/analytics.service.js";
 import { PrismaAuthRepository } from "../../api/src/modules/auth/auth.repository.js";
 import {
   Argon2PasswordHasher,
   AuthService,
 } from "../../api/src/modules/auth/auth.service.js";
+import { PrismaBillingRepository } from "../../api/src/modules/billing/billing.repository.js";
+import { BillingService } from "../../api/src/modules/billing/billing.service.js";
 import { PrismaCustomerRepository } from "../../api/src/modules/customer/customer.repository.js";
 import { CustomerService } from "../../api/src/modules/customer/customer.service.js";
 import { PrismaHealthRepository } from "../../api/src/modules/health/health.repository.js";
+import { PrismaMenuRepository } from "../../api/src/modules/menu/menu.repository.js";
+import { MenuService } from "../../api/src/modules/menu/menu.service.js";
 import { PrismaOrderRepository } from "../../api/src/modules/orders/order.repository.js";
 import { OrderService } from "../../api/src/modules/orders/order.service.js";
 import {
@@ -35,6 +41,8 @@ import { PrismaRestaurantRepository } from "../../api/src/modules/restaurants/re
 import { RestaurantService } from "../../api/src/modules/restaurants/restaurant.service.js";
 import { PrismaStaffRepository } from "../../api/src/modules/staff/staff.repository.js";
 import { StaffService } from "../../api/src/modules/staff/staff.service.js";
+import { PrismaTableRepository } from "../../api/src/modules/tables/table.repository.js";
+import { TableService } from "../../api/src/modules/tables/table.service.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const liveApiUrl = process.env.REAL_CUSTOMER_API_URL ?? "http://localhost:4000";
@@ -54,9 +62,7 @@ test.describe("live customer browser to kitchen flow", () => {
   const userId = randomUUID();
   const membershipId = randomUUID();
   const tableId = randomUUID();
-  const tableSessionId = randomUUID();
-  const categoryId = randomUUID();
-  const itemId = randomUUID();
+  let tableSessionId = "";
   const identifier = randomBytes(32).toString("base64url");
   const email = `browser-customer-${suffix}@example.test`;
   const password = `Local-test-${randomUUID()}!`;
@@ -98,29 +104,6 @@ test.describe("live customer browser to kitchen flow", () => {
         qrIdentifier: identifier,
       },
     });
-    await prisma.tableSession.create({
-      data: {
-        id: tableSessionId,
-        restaurantId,
-        tableId,
-        openedByMembershipId: membershipId,
-      },
-    });
-    await prisma.menuCategory.create({
-      data: { id: categoryId, restaurantId, name: `Live mains ${suffix}` },
-    });
-    await prisma.menuItem.create({
-      data: {
-        id: itemId,
-        restaurantId,
-        categoryId,
-        name: "Live Paneer Plate",
-        description: "Prepared through the real API",
-        priceMinor: 12_500,
-        isVegetarian: true,
-      },
-    });
-
     const authService = new AuthService(
       new PrismaAuthRepository(prisma),
       passwordHasher,
@@ -151,7 +134,19 @@ test.describe("live customer browser to kitchen flow", () => {
         new PrismaStaffRepository(prisma),
         passwordHasher,
       ),
+      menuService: new MenuService(new PrismaMenuRepository(prisma)),
+      tableService: new TableService(
+        new PrismaTableRepository(prisma),
+        "http://localhost:3100",
+      ),
       orderService,
+      billingService: new BillingService(
+        new PrismaBillingRepository(prisma),
+        publisher,
+      ),
+      analyticsService: new AnalyticsService(
+        new PrismaAnalyticsRepository(prisma),
+      ),
     });
     const server = createServer(app);
     const realtime = createRealtimeServer(server, {
@@ -181,6 +176,11 @@ test.describe("live customer browser to kitchen flow", () => {
     if (httpToClose?.listening)
       await new Promise<void>((resolve) => httpToClose.close(() => resolve()));
 
+    await prisma.paymentIdempotency.deleteMany({ where: { restaurantId } });
+    await prisma.payment.deleteMany({ where: { restaurantId } });
+    await prisma.billItemModifier.deleteMany({ where: { restaurantId } });
+    await prisma.billItem.deleteMany({ where: { restaurantId } });
+    await prisma.bill.deleteMany({ where: { restaurantId } });
     await prisma.idempotencyKey.deleteMany({ where: { restaurantId } });
     await prisma.orderItemModifier.deleteMany({
       where: { orderItem: { restaurantId } },
@@ -206,7 +206,7 @@ test.describe("live customer browser to kitchen flow", () => {
     await prisma.$disconnect();
   });
 
-  test("persists a browser order, publishes it to KDS, and tracks kitchen progress", async ({
+  test("completes a real restaurant journey from setup through analytics", async ({
     page,
   }) => {
     const staff = await request.newContext({
@@ -217,6 +217,50 @@ test.describe("live customer browser to kitchen flow", () => {
       data: { email, password },
     });
     expect(login.ok()).toBe(true);
+
+    const restaurantUpdate = await staff.patch(
+      `/api/v1/restaurants/${restaurantId}`,
+      {
+        data: {
+          name: `Live Browser Kitchen ${suffix}`,
+          slug: `live-browser-kitchen-${suffix}`,
+          address: "1 Complete Journey Street",
+          phone: "+91 99999 00000",
+          email: "journey@example.test",
+          timezone: "Asia/Kolkata",
+          currency: "INR",
+          taxName: "GST",
+          taxRateBasisPoints: 0,
+          pricesIncludeTax: false,
+        },
+      },
+    );
+    expect(restaurantUpdate.ok()).toBe(true);
+    const categoryResponse = await staff.post("/api/v1/menu/categories", {
+      headers: { "x-restaurant-id": restaurantId },
+      data: { name: `Live mains ${suffix}`, sortOrder: 0 },
+    });
+    expect(categoryResponse.ok()).toBe(true);
+    const categoryBody = (await categoryResponse.json()) as {
+      category: { id: string };
+    };
+    const itemResponse = await staff.post("/api/v1/menu/items", {
+      headers: { "x-restaurant-id": restaurantId },
+      data: {
+        categoryId: categoryBody.category.id,
+        name: "Live Paneer Plate",
+        description: "Prepared through the real API",
+        priceMinor: 12_500,
+        isVegetarian: true,
+      },
+    });
+    expect(itemResponse.ok()).toBe(true);
+    const opened = await staff.post(`/api/v1/tables/${tableId}/sessions`, {
+      headers: { "x-restaurant-id": restaurantId },
+    });
+    expect(opened.ok()).toBe(true);
+    tableSessionId = ((await opened.json()) as { session: { id: string } })
+      .session.id;
     const issued = await staff.post(
       `/api/v1/table-sessions/${tableSessionId}/customer-access`,
       { headers: { "x-restaurant-id": restaurantId } },
@@ -277,6 +321,75 @@ test.describe("live customer browser to kitchen flow", () => {
     );
     expect(preparing.ok()).toBe(true);
     await expect(page.getByText("Your food is being prepared")).toBeVisible();
+
+    const preparingBody = (await preparing.json()) as {
+      order: { version: number };
+    };
+    const tickets = await staff.get("/api/v1/kitchen/tickets", {
+      headers: { "x-restaurant-id": restaurantId },
+    });
+    expect(tickets.ok()).toBe(true);
+    expect(JSON.stringify(await tickets.json())).toContain(stored.id);
+    const ready = await staff.patch(
+      `/api/v1/kitchen/orders/${stored.id}/status`,
+      {
+        headers: { "x-restaurant-id": restaurantId },
+        data: { version: preparingBody.order.version, status: "READY" },
+      },
+    );
+    expect(ready.ok()).toBe(true);
+    const readyBody = (await ready.json()) as { order: { version: number } };
+    const served = await staff.patch(`/api/v1/orders/${stored.id}/status`, {
+      headers: { "x-restaurant-id": restaurantId },
+      data: { version: readyBody.order.version, status: "SERVED" },
+    });
+    expect(served.ok()).toBe(true);
+
+    const finalized = await staff.post(
+      `/api/v1/table-sessions/${tableSessionId}/bills`,
+      { headers: { "x-restaurant-id": restaurantId } },
+    );
+    expect(finalized.ok()).toBe(true);
+    const finalizedBody = (await finalized.json()) as {
+      bill: { id: string; totalMinor: number };
+    };
+    const paid = await staff.post(
+      `/api/v1/bills/${finalizedBody.bill.id}/payments`,
+      {
+        headers: {
+          "x-restaurant-id": restaurantId,
+          "idempotency-key": `live-payment-${suffix}`,
+        },
+        data: {
+          amountMinor: finalizedBody.bill.totalMinor,
+          method: "CASH",
+          receivedExternally: true,
+        },
+      },
+    );
+    expect(paid.ok()).toBe(true);
+    const closed = await staff.post(
+      `/api/v1/table-sessions/${tableSessionId}/close`,
+      { headers: { "x-restaurant-id": restaurantId } },
+    );
+    expect(closed.ok()).toBe(true);
+
+    const analytics = await staff.get(
+      "/api/v1/analytics/overview?startDate=2026-11-20&endDate=2026-11-21&granularity=day",
+      { headers: { "x-restaurant-id": restaurantId } },
+    );
+    expect(analytics.ok()).toBe(true);
+    const analyticsBody = (await analytics.json()) as {
+      overview: { finalizedSales: { value: string } };
+    };
+    expect(analyticsBody.overview.finalizedSales.value).toBe(
+      String(finalizedBody.bill.totalMinor),
+    );
+    expect(
+      await prisma.tableSession.findUniqueOrThrow({
+        where: { id: tableSessionId },
+      }),
+    ).toMatchObject({ status: "CLOSED" });
     await staff.dispose();
   });
 });

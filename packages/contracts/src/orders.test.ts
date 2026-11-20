@@ -7,7 +7,7 @@ import {
   orderListQuerySchema,
   updateOrderItemStatusRequestSchema,
   updateOrderStatusRequestSchema,
-} from "./orders";
+} from "./orders.js";
 
 const menuItemId = "10000000-0000-4000-8000-000000000001";
 const modifierId = "10000000-0000-4000-8000-000000000002";

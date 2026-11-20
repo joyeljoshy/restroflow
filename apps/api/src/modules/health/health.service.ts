@@ -1,4 +1,4 @@
-import type { HealthResponse } from "@restroflow/contracts";
+import type { HealthResponse, LivenessResponse } from "@restroflow/contracts";
 
 import type { HealthRepository } from "./health.repository.js";
 
@@ -16,6 +16,15 @@ export class HealthService {
       version: this.version,
       timestamp: new Date().toISOString(),
       checks: { database: databaseAvailable ? "up" : "down" },
+    };
+  }
+
+  live(): LivenessResponse {
+    return {
+      status: "ok",
+      service: "restroflow-api",
+      version: this.version,
+      timestamp: new Date().toISOString(),
     };
   }
 }

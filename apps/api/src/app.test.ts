@@ -72,6 +72,31 @@ describe("GET /api/v1/health", () => {
     });
   });
 
+  it("keeps liveness independent from PostgreSQL readiness", async () => {
+    await request(buildApp(false))
+      .get("/api/v1/health/live")
+      .expect(200, /restroflow-api/);
+    await request(buildApp(false)).get("/api/v1/health/ready").expect(503);
+  });
+
+  it("rejects unsafe browser requests from untrusted origins", async () => {
+    const response = await request(buildApp(true))
+      .post("/api/v1/auth/logout")
+      .set("Origin", "http://attacker.localhost:3001")
+      .expect(403);
+    expect(response.body).toMatchObject({
+      error: { code: "ORIGIN_FORBIDDEN" },
+    });
+  });
+
+  it("allows unsafe requests from trusted origins and non-browser clients", async () => {
+    await request(buildApp(true))
+      .post("/api/v1/auth/logout")
+      .set("Origin", "http://localhost:3000")
+      .expect(204);
+    await request(buildApp(true)).post("/api/v1/auth/logout").expect(204);
+  });
+
   it("uses the centralized not-found shape", async () => {
     const response = await request(buildApp(true)).get("/missing").expect(404);
     const body = response.body as { error: { code: string } };

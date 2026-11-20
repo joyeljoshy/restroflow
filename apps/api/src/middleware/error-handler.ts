@@ -39,6 +39,23 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
   }
 
   if (error instanceof AppError) {
+    if (
+      error.statusCode === 401 ||
+      error.statusCode === 403 ||
+      error.statusCode === 409 ||
+      error.statusCode >= 500
+    ) {
+      const level = error.statusCode >= 500 ? "error" : "warn";
+      req.log?.[level](
+        {
+          errorCode: error.code,
+          statusCode: error.statusCode,
+          method: req.method,
+          path: req.path,
+        },
+        "Request rejected",
+      );
+    }
     res.status(error.statusCode).json({
       error: {
         code: error.code,
@@ -50,7 +67,7 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, next) => {
     return;
   }
 
-  req.log.error({ err: error }, "Unhandled request error");
+  req.log?.error({ err: error }, "Unhandled request error");
   res.status(500).json({
     error: {
       code: "INTERNAL_SERVER_ERROR",

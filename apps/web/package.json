@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "npm run build -w @restroflow/contracts",
     "dev": "next dev",
-    "build": "next build",
+    "build": "npm run build -w @restroflow/contracts && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "pretest": "npm run build -w @restroflow/contracts",
     "test": "vitest run",
     "test:e2e": "playwright test"
   },
@@ -31,6 +33,7 @@
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.56.1",
     "@tailwindcss/postcss": "^4.1.17",

@@ -4,7 +4,7 @@ import {
   assignModifierGroupsRequestSchema,
   createMenuItemRequestSchema,
   createModifierGroupRequestSchema,
-} from "./menu";
+} from "./menu.js";
 
 describe("menu contracts", () => {
   it("rejects negative base prices", () => {

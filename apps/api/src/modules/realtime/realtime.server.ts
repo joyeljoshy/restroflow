@@ -101,6 +101,10 @@ export function createRealtimeServer(
 ): RealtimeServer {
   const io: RealtimeServer = new Server(server, {
     cors: { origin: options.allowedOrigins, credentials: true },
+    allowRequest(request, callback) {
+      const origin = request.headers.origin;
+      callback(null, !origin || options.allowedOrigins.includes(origin));
+    },
     transports: ["websocket", "polling"],
   });
 

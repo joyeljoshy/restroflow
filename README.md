@@ -71,7 +71,10 @@ PostgreSQL is the source of truth. The API owns database access and exposes vers
    - Web: http://localhost:3000
    - API health: http://localhost:4000/api/v1/health
 
-The health endpoint returns HTTP `200` when PostgreSQL is reachable and `503` with a degraded status when it is not.
+Use `/api/v1/health/live` for process liveness and `/api/v1/health/ready` for
+database-backed readiness. The compatibility endpoint `/api/v1/health` remains
+an alias for readiness; readiness returns HTTP `503` with a safe degraded
+payload when PostgreSQL is unavailable.
 
 ## Environment variables
 
@@ -99,6 +102,7 @@ To point the browser at a non-default API, set `NEXT_PUBLIC_API_URL` for the web
 | `npm run typecheck`                              | Type-check all workspaces                     |
 | `npm test`                                       | Run Vitest and Supertest suites               |
 | `npm run test:e2e`                               | Run Playwright tests (install Chromium first) |
+| `npm run load:test`                              | Run the isolated local API load harness       |
 | `npm run format`                                 | Format tracked source files                   |
 | `npm run format:check`                           | Check formatting                              |
 | `npm run db:generate`                            | Generate Prisma Client                        |
@@ -286,7 +290,7 @@ Every endpoint accepts `startDate`, `endDate`, and `granularity=day|week|month`;
 
 Money remains integer minor units in PostgreSQL. Aggregates cross the wire as decimal strings so values above JavaScript's safe-integer range are not rounded; the UI formats them with `BigInt`. Charts are withheld if a value cannot be represented exactly by the chart library, while exact KPI values remain visible. Analytics never writes to bills, payments, orders, sessions, or histories.
 
-The migration adds restaurant/event-time indexes for bill finalization, payment recording, order creation, and table-session closure. Existing status-history indexes serve order and kitchen reports. Run `npm run benchmark:analytics -w @restroflow/api` for a repeatable benchmark: it creates a uniquely scoped 500-row restaurant fixture, warms and samples the overview, sales, payments, and popular-items queries five times, prints medians, and deletes only that fixture in a `finally` block.
+The migration adds restaurant/event-time indexes for bill finalization, payment recording, order creation, and table-session closure. Existing status-history indexes serve order and kitchen reports. Run `npm run benchmark:analytics -w @restroflow/api` for a repeatable benchmark: it creates a uniquely scoped fixture, refreshes planner statistics, warms and samples the overview, sales, payments, and popular-items queries, prints median/p95 timings, and deletes only that fixture in a `finally` block. Configure 1-50,000 rows with `ANALYTICS_BENCHMARK_ROWS`, the sample count with `ANALYTICS_BENCHMARK_SAMPLES`, and an `EXPLAIN ANALYZE` summary with `ANALYTICS_BENCHMARK_EXPLAIN=1`. The command refuses production and non-local databases unless the remote-database override is explicitly enabled.
 
 ### Create the first development admin
 
@@ -307,6 +311,9 @@ The operation is transactional and repeatable. Re-running it intentionally refre
 
 ## Verification
 
+The security, accessibility, observability, and performance review is recorded
+in [the Part 11 hardening report](docs/part-11-hardening-report.md).
+
 ```bash
 npm run format:check
 npm run lint
@@ -319,7 +326,7 @@ For a manual smoke test, sign in as the development admin, update and reload `/a
 
 For the customer flow, keep the waiter and kitchen browsers open and scan/open the table QR in a third private browser. Browse and customize an item, then use **Customer code** on the waiter table card to issue a code. Activate, submit, and confirm the CUSTOMER ticket appears in the existing KDS. Move it through preparation and verify the customer tracker updates. Open the same QR in a fourth private browser, issue a separate code, and confirm it cannot read the first customer's order. Rotate the QR and confirm the old URL returns unavailable.
 
-For billing, serve every active order, sign in as a cashier, open `/cashier`, select the occupied table, verify the preview and tax breakdown, and finalize. Record a partial cash amount, then the remaining amount as manually confirmed UPI; verify the receipt shows both records and a zero outstanding balance. Print the receipt and close the table. Confirm an unpaid bill cannot close, a waiter cannot record payment, an overpayment is rejected, and retrying the same request with one idempotency key does not create another payment. Closing the session should invalidate its customer REST and realtime access. Check phone, tablet, keyboard, offline/reconnect, and page-reload behavior, then call the health endpoint and verify `checks.database` is `up`.
+For billing, serve every active order, sign in as a cashier, open `/cashier`, select the occupied table, verify the preview and tax breakdown, and finalize. Record a partial cash amount, then the remaining amount as manually confirmed UPI; verify the receipt shows both records and a zero outstanding balance. Print the receipt and close the table. Confirm an unpaid bill cannot close, a waiter cannot record payment, an overpayment is rejected, and retrying the same request with one idempotency key does not create another payment. Closing the session should invalidate its customer REST and realtime access. Check phone, tablet, keyboard, offline/reconnect, and page-reload behavior, then call `/api/v1/health/ready` and verify `checks.database` is `up`.
 
 ## Stopping local services
 

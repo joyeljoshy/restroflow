@@ -4,7 +4,7 @@ import {
   billChangedEventSchema,
   orderChangedEventSchema,
   realtimeSubscriptionSchema,
-} from "./realtime";
+} from "./realtime.js";
 
 describe("realtime contracts", () => {
   it("accepts minimal versioned invalidation events", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { billListQuerySchema, createPaymentRequestSchema } from "./billing";
+import { billListQuerySchema, createPaymentRequestSchema } from "./billing.js";
 
 describe("billing contracts", () => {
   it("requires a positive integer payment and explicit receipt confirmation", () => {
