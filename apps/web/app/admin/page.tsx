@@ -1,10 +1,11 @@
 import { WorkspacePlaceholder } from "@/components/layout/workspace-placeholder";
+
 export default function AdminPage() {
   return (
     <WorkspacePlaceholder
       eyebrow="Operations overview"
-      title="Good evening, Admin"
-      description="Restaurant health, team access, and analytics will come together here as their domain features are implemented."
+      title="Restaurant command center"
+      description="Manage the restaurant workspace here, or open Analytics for finalized financial and operational reporting."
       metrics={[
         {
           label: "Team access",
@@ -12,14 +13,14 @@ export default function AdminPage() {
           note: "Profiles, roles, and account status",
         },
         {
-          label: "Open orders",
-          value: "—",
-          note: "Order workflows are not implemented",
+          label: "Order operations",
+          value: "Live",
+          note: "Waiter, customer, and kitchen workflows",
         },
         {
-          label: "Net sales",
-          value: "₹—",
-          note: "Billing and analytics are not implemented",
+          label: "Analytics",
+          value: "Live",
+          note: "Persisted sales, payment, table, and kitchen reports",
         },
       ]}
     />

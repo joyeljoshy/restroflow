@@ -8,6 +8,8 @@ import type { Logger } from "pino";
 
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFoundHandler } from "./middleware/not-found.js";
+import { AnalyticsController } from "./modules/analytics/analytics.controller.js";
+import type { AnalyticsServiceContract } from "./modules/analytics/analytics.service.js";
 import { AuthController } from "./modules/auth/auth.controller.js";
 import type { SessionCookieOptions } from "./modules/auth/auth.cookies.js";
 import type { AuthServiceContract } from "./modules/auth/auth.service.js";
@@ -47,6 +49,7 @@ type AppOptions = {
   orderService?: OrderServiceContract;
   customerService?: CustomerServiceContract;
   billingService?: BillingServiceContract;
+  analyticsService?: AnalyticsServiceContract;
   customerCookieOptions?: SessionCookieOptions;
   version?: string;
 };
@@ -84,6 +87,9 @@ export function createApp(options: AppOptions) {
       : undefined;
   const billingController = options.billingService
     ? new BillingController(options.billingService)
+    : undefined;
+  const analyticsController = options.analyticsService
+    ? new AnalyticsController(options.analyticsService)
     : undefined;
 
   app.disable("x-powered-by");
@@ -148,6 +154,7 @@ export function createApp(options: AppOptions) {
       options.customerCookieOptions,
       options.allowedOrigins,
       billingController,
+      analyticsController,
     ),
   );
   app.use(notFoundHandler);

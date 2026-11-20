@@ -1,6 +1,6 @@
 # RestroFlow
 
-RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 9 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff and customer ordering, a waiter POS, a real-time Kitchen Display System, and immutable billing with manual cash/UPI payment recording. Inventory, refunds, gateway settlement, and analytics are intentionally not implemented yet.
+RestroFlow is a production-minded restaurant operations platform built as a TypeScript monorepo. Parts 1 through 10 provide the application shell, API foundation, PostgreSQL/Prisma connectivity, shared contracts, secure staff authentication, role-based restaurant access, restaurant settings, staff account management, menu management, restaurant tables and sessions, secure table QR management, transactional staff and customer ordering, a waiter POS, a real-time Kitchen Display System, immutable billing with manual cash/UPI payment recording, and restaurant-scoped operational analytics. Inventory, refunds, and gateway settlement are intentionally not implemented yet.
 
 ## Architecture
 
@@ -91,21 +91,22 @@ To point the browser at a non-default API, set `NEXT_PUBLIC_API_URL` for the web
 
 ## Commands
 
-| Command                               | Description                                   |
-| ------------------------------------- | --------------------------------------------- |
-| `npm run dev`                         | Run web and API development servers           |
-| `npm run build`                       | Build all workspaces                          |
-| `npm run lint`                        | Lint all workspaces                           |
-| `npm run typecheck`                   | Type-check all workspaces                     |
-| `npm test`                            | Run Vitest and Supertest suites               |
-| `npm run test:e2e`                    | Run Playwright tests (install Chromium first) |
-| `npm run format`                      | Format tracked source files                   |
-| `npm run format:check`                | Check formatting                              |
-| `npm run db:generate`                 | Generate Prisma Client                        |
-| `npm run db:migrate -- --name <name>` | Create and apply a development migration      |
-| `npm run db:migrate:deploy`           | Apply committed migrations in deployment      |
-| `npm run db:seed`                     | Run the explicit safe seed script             |
-| `npm run db:studio`                   | Open Prisma Studio                            |
+| Command                                          | Description                                   |
+| ------------------------------------------------ | --------------------------------------------- |
+| `npm run dev`                                    | Run web and API development servers           |
+| `npm run build`                                  | Build all workspaces                          |
+| `npm run lint`                                   | Lint all workspaces                           |
+| `npm run typecheck`                              | Type-check all workspaces                     |
+| `npm test`                                       | Run Vitest and Supertest suites               |
+| `npm run test:e2e`                               | Run Playwright tests (install Chromium first) |
+| `npm run format`                                 | Format tracked source files                   |
+| `npm run format:check`                           | Check formatting                              |
+| `npm run db:generate`                            | Generate Prisma Client                        |
+| `npm run db:migrate -- --name <name>`            | Create and apply a development migration      |
+| `npm run db:migrate:deploy`                      | Apply committed migrations in deployment      |
+| `npm run db:seed`                                | Run the explicit safe seed script             |
+| `npm run db:studio`                              | Open Prisma Studio                            |
+| `npm run benchmark:analytics -w @restroflow/api` | Run the isolated analytics query benchmark    |
 
 Install the Playwright browser once before local end-to-end tests:
 
@@ -251,6 +252,41 @@ Billing endpoints are mounted under `/api/v1`:
 - `GET|POST /bills/:id/payments`
 
 `POST /table-sessions/:id/bills` performs creation and finalization as one atomic operation; a mutable persisted draft endpoint is intentionally omitted. A table session containing served items can close only after every eligible item is represented in its fully paid bill. Sessions containing no billable items may still close after all orders resolve.
+
+## Restaurant analytics
+
+Administrators and managers use `/admin/analytics`; cashier, waiter, kitchen, and customer identities cannot access the analytics API. The client-supplied `x-restaurant-id` only selects one of the authenticated user's memberships, and every repository query applies the resulting server-derived restaurant ID.
+
+Analytics endpoints are mounted under `/api/v1/analytics`:
+
+- `GET /overview`
+- `GET /sales`
+- `GET /payments`
+- `GET /popular-items`
+- `GET /orders`
+- `GET /tables`
+- `GET /kitchen`
+
+Every endpoint accepts `startDate`, `endDate`, and `granularity=day|week|month`; popular items also accepts a bounded `limit`. Dates are restaurant-local calendar dates using an inclusive start and exclusive end. PostgreSQL converts each local midnight through the restaurant's IANA timezone and then into the UTC representation stored by Prisma. This handles non-UTC restaurants, midnight records, and daylight-saving days without consulting the Node.js host timezone. Ranges are limited to 366 days.
+
+### Metric definitions
+
+| Metric                              | Source and event timestamp                                   | Formula and status policy                                                                                                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Finalized sales                     | `Bill.totalMinor`, `Bill.finalizedAt`                        | Sum immutable totals for all persisted finalized-lifecycle bills in `[start, end)`; bills remain included when later partially or fully paid.                                                                              |
+| Recorded payments                   | `Payment.amountMinor`, `Payment.recordedAt`                  | Sum `RECORDED` cash/UPI rows in `[start, end)`; UPI is staff-recorded, not provider-settled.                                                                                                                               |
+| Current outstanding                 | Current `Bill` rows                                          | Sum `totalMinor - amountPaidMinor` for `FINALIZED` and `PARTIALLY_PAID` bills across all dates.                                                                                                                            |
+| Period outstanding                  | `Bill.finalizedAt` plus current balance                      | The same remaining-balance formula, restricted to bills finalized in `[start, end)`.                                                                                                                                       |
+| Average bill value                  | `Bill.totalMinor`, `Bill.finalizedAt`                        | Finalized sales divided by finalized bill count, rounded to the nearest minor unit; zero when no bills exist.                                                                                                              |
+| Orders created/source               | `Order.createdAt`                                            | Count order records once, so add-item batches do not inflate order volume.                                                                                                                                                 |
+| Completed/cancelled/rejected orders | `OrderStatusHistory.createdAt`                               | Count distinct order IDs by the corresponding terminal transition in `[start, end)`.                                                                                                                                       |
+| Popular items                       | `BillItem` snapshots joined to source `OrderItem.menuItemId` | Sum snapshot quantity and `finalLineAmountMinor`; group by stable menu-item identity and use the latest in-range snapshot name.                                                                                            |
+| Table duration                      | `TableSession.openedAt`/`closedAt`                           | Average valid closed-session duration for sessions closed in `[start, end)`; open sessions are excluded. No occupancy percentage is inferred.                                                                              |
+| Kitchen duration                    | `OrderItemStatusHistory.createdAt`                           | For non-cancelled items/orders with ordered `PENDING → PREPARING → READY` events, report queue, preparation, and total-to-ready averages by ready time. Missing transitions are excluded and the sample count is returned. |
+
+Money remains integer minor units in PostgreSQL. Aggregates cross the wire as decimal strings so values above JavaScript's safe-integer range are not rounded; the UI formats them with `BigInt`. Charts are withheld if a value cannot be represented exactly by the chart library, while exact KPI values remain visible. Analytics never writes to bills, payments, orders, sessions, or histories.
+
+The migration adds restaurant/event-time indexes for bill finalization, payment recording, order creation, and table-session closure. Existing status-history indexes serve order and kitchen reports. Run `npm run benchmark:analytics -w @restroflow/api` for a repeatable benchmark: it creates a uniquely scoped 500-row restaurant fixture, warms and samples the overview, sales, payments, and popular-items queries five times, prints medians, and deletes only that fixture in a `finally` block.
 
 ### Create the first development admin
 

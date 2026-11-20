@@ -1,13 +1,28 @@
 export function formatMinorCurrency(
-  amountMinor: number,
+  amountMinor: number | string | bigint,
   currency = "INR",
   locale = "en-IN",
 ) {
-  return new Intl.NumberFormat(locale, {
+  const minor = BigInt(amountMinor);
+  const formatter = new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
     minimumFractionDigits: 2,
-  }).format(amountMinor / 100);
+    maximumFractionDigits: 2,
+  });
+  const whole = minor / 100n;
+  const fraction = (minor % 100n).toString().padStart(2, "0");
+  const groupedWhole = new Intl.NumberFormat(locale, {
+    maximumFractionDigits: 0,
+  }).format(whole);
+  return formatter
+    .formatToParts(0)
+    .map((part) => {
+      if (part.type === "integer") return groupedWhole;
+      if (part.type === "fraction") return fraction;
+      return part.value;
+    })
+    .join("");
 }
 
 export function majorAmountToMinor(value: string): number | null {

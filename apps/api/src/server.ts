@@ -8,6 +8,8 @@ import { loadEnvironment } from "./config/env.js";
 import { createLogger } from "./lib/logger.js";
 import { createPrismaClient } from "./lib/prisma.js";
 import { PrismaAuthRepository } from "./modules/auth/auth.repository.js";
+import { PrismaAnalyticsRepository } from "./modules/analytics/analytics.repository.js";
+import { AnalyticsService } from "./modules/analytics/analytics.service.js";
 import {
   Argon2PasswordHasher,
   AuthService,
@@ -51,6 +53,9 @@ const billingService = new BillingService(
   new PrismaBillingRepository(prisma),
   realtimePublisher,
 );
+const analyticsService = new AnalyticsService(
+  new PrismaAnalyticsRepository(prisma),
+);
 const customerService = new CustomerService(
   new PrismaCustomerRepository(prisma),
   passwordHasher,
@@ -83,6 +88,7 @@ const app = createApp({
   orderService,
   customerService,
   billingService,
+  analyticsService,
   customerCookieOptions: {
     secure: env.NODE_ENV === "production",
     maxAgeMs: 4 * 60 * 60 * 1000,

@@ -32,7 +32,7 @@ const roleConfig = {
       ["Menu", "/admin/menu", ShoppingBag],
       ["Tables", "/admin/tables", Armchair],
       ["Team", "/admin/staff", Users],
-      ["Analytics", "/admin#analytics", BarChart3],
+      ["Analytics", "/admin/analytics", BarChart3],
       ["Settings", "/admin/settings", Settings],
     ],
   },

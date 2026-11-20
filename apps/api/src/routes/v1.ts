@@ -1,5 +1,7 @@
 import { Router } from "express";
 
+import type { AnalyticsController } from "../modules/analytics/analytics.controller.js";
+import { createAnalyticsRouter } from "../modules/analytics/analytics.routes.js";
 import type { AuthController } from "../modules/auth/auth.controller.js";
 import type { SessionCookieOptions } from "../modules/auth/auth.cookies.js";
 import { createAuthRouter } from "../modules/auth/auth.routes.js";
@@ -37,6 +39,7 @@ export function createV1Router(
   customerCookieOptions?: SessionCookieOptions,
   allowedOrigins: string[] = [],
   billingController?: BillingController,
+  analyticsController?: AnalyticsController,
 ): Router {
   const router = Router();
   router.use(
@@ -85,6 +88,12 @@ export function createV1Router(
   if (billingController) {
     router.use(
       createBillingRouter(billingController, authService, cookieOptions),
+    );
+  }
+  if (analyticsController) {
+    router.use(
+      "/analytics",
+      createAnalyticsRouter(analyticsController, authService, cookieOptions),
     );
   }
   return router;
