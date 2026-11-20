@@ -3,7 +3,7 @@ services:
     runtime: node
     name: restroflow-api
     plan: free
-    buildCommand: npm ci && npm run build -w @restroflow/api
+    buildCommand: npm ci --include=dev && npm run build -w @restroflow/api
     startCommand: npm run start -w @restroflow/api
     healthCheckPath: /api/v1/health/live
     autoDeployTrigger: "off"
