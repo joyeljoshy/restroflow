@@ -7,7 +7,6 @@ services:
     startCommand: npm run start -w @restroflow/api
     healthCheckPath: /api/v1/health/live
     autoDeployTrigger: "off"
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: NODE_ENV
         value: production
