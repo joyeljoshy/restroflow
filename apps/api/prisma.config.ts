@@ -9,7 +9,8 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
-    // Generation does not need a database; connecting CLI commands validate this value.
-    url: process.env.DATABASE_URL ?? "",
+    // Runtime traffic can use a pooled URL while migrations retain a direct,
+    // session-stable connection. Local development may use one URL for both.
+    url: process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? "",
   },
 });

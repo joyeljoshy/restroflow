@@ -26,6 +26,7 @@ import {
   type AuthServiceContract,
   type PasswordHasher,
 } from "./auth.service.js";
+import type { SessionCookieOptions } from "./auth.cookies.js";
 
 const restaurantId = "9010e67f-4aa1-428e-bc26-6de08366aab2";
 const otherRestaurantId = "ab88f4ee-d8e4-4dc6-8400-99ee336983e7";
@@ -107,11 +108,15 @@ function createTestAuthService(
 function createAuthApp(
   authService: AuthServiceContract,
   loginRateLimitMax = 50,
+  cookieOptions: SessionCookieOptions = {
+    secure: false,
+    maxAgeMs: 60 * 60 * 1000,
+  },
 ) {
   return createApp({
     allowedOrigins: ["http://localhost:3000"],
     authService,
-    cookieOptions: { secure: false, maxAgeMs: 60 * 60 * 1000 },
+    cookieOptions,
     healthRepository: { isDatabaseAvailable: () => Promise.resolve(true) },
     loginRateLimitMax,
     logger: pino({ enabled: false }),
@@ -147,6 +152,23 @@ describe("staff authentication", () => {
     );
     expect(response.headers["set-cookie"]?.[0]).toContain("HttpOnly");
     expect(repository.session?.tokenHash).not.toBe("test-session-token");
+  });
+
+  it("supports secure cross-site cookies for the Vercel-to-Render deployment", async () => {
+    const response = await request(
+      createAuthApp(createTestAuthService(new MemoryAuthRepository()), 50, {
+        secure: true,
+        sameSite: "none",
+        maxAgeMs: 60 * 60 * 1000,
+      }),
+    )
+      .post("/api/v1/auth/login")
+      .send({ email: "admin@example.com", password: "valid-password" })
+      .expect(200);
+
+    expect(response.headers["set-cookie"]?.[0]).toContain("Secure");
+    expect(response.headers["set-cookie"]?.[0]).toContain("SameSite=None");
+    expect(response.headers["set-cookie"]?.[0]).toContain("HttpOnly");
   });
 
   it("returns one generic error for invalid credentials", async () => {

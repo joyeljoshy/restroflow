@@ -5,6 +5,7 @@ export const SESSION_COOKIE_NAME = "restroflow_session";
 export type SessionCookieOptions = {
   secure: boolean;
   maxAgeMs: number;
+  sameSite?: "lax" | "none";
 };
 
 export function readSessionToken(req: Request): string | undefined {
@@ -39,7 +40,7 @@ export function setSessionCookie(
   res.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     secure: options.secure,
-    sameSite: "lax",
+    sameSite: options.sameSite ?? "lax",
     path: "/",
     maxAge: options.maxAgeMs,
   });
@@ -52,7 +53,7 @@ export function clearSessionCookie(
   res.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
     secure: options.secure,
-    sameSite: "lax",
+    sameSite: options.sameSite ?? "lax",
     path: "/",
   });
 }

@@ -19,7 +19,11 @@ import { PrismaCustomerRepository } from "./modules/customer/customer.repository
 import { CustomerService } from "./modules/customer/customer.service.js";
 import { PrismaBillingRepository } from "./modules/billing/billing.repository.js";
 import { BillingService } from "./modules/billing/billing.service.js";
-import { LocalMenuImageStorage } from "./modules/menu/menu-image.storage.js";
+import {
+  CloudinaryMenuImageStorage,
+  createCloudinaryUpload,
+  LocalMenuImageStorage,
+} from "./modules/menu/menu-image.storage.js";
 import { PrismaMenuRepository } from "./modules/menu/menu.repository.js";
 import { MenuService } from "./modules/menu/menu.service.js";
 import { PrismaOrderRepository } from "./modules/orders/order.repository.js";
@@ -46,6 +50,18 @@ const authService = new AuthService(
 );
 const passwordHasher = new Argon2PasswordHasher();
 const menuImageDirectory = path.resolve(env.MENU_IMAGE_DIRECTORY);
+const menuImageStorage =
+  env.IMAGE_STORAGE_PROVIDER === "cloudinary"
+    ? new CloudinaryMenuImageStorage(
+        env.CLOUDINARY_CLOUD_NAME!,
+        env.CLOUDINARY_FOLDER,
+        createCloudinaryUpload({
+          cloudName: env.CLOUDINARY_CLOUD_NAME!,
+          apiKey: env.CLOUDINARY_API_KEY!,
+          apiSecret: env.CLOUDINARY_API_SECRET!,
+        }),
+      )
+    : new LocalMenuImageStorage(menuImageDirectory);
 const orderRepository = new PrismaOrderRepository(prisma);
 const realtimePublisher = new SocketIoRealtimePublisher();
 const orderService = new OrderService(orderRepository, realtimePublisher);
@@ -67,6 +83,7 @@ const app = createApp({
   cookieOptions: {
     secure: env.NODE_ENV === "production",
     maxAgeMs: sessionTtlMs,
+    sameSite: env.COOKIE_SAME_SITE,
   },
   healthRepository: new PrismaHealthRepository(prisma),
   loginRateLimitMax: env.LOGIN_RATE_LIMIT_MAX,
@@ -79,8 +96,9 @@ const app = createApp({
     passwordHasher,
   ),
   menuService: new MenuService(new PrismaMenuRepository(prisma)),
-  menuImageStorage: new LocalMenuImageStorage(menuImageDirectory),
-  menuImageDirectory,
+  menuImageStorage,
+  menuImageDirectory:
+    env.IMAGE_STORAGE_PROVIDER === "local" ? menuImageDirectory : undefined,
   tableService: new TableService(
     new PrismaTableRepository(prisma),
     env.PUBLIC_WEB_ORIGIN,
@@ -92,7 +110,9 @@ const app = createApp({
   customerCookieOptions: {
     secure: env.NODE_ENV === "production",
     maxAgeMs: 4 * 60 * 60 * 1000,
+    sameSite: env.COOKIE_SAME_SITE,
   },
+  trustProxyHops: env.TRUST_PROXY_HOPS,
 });
 
 const server = createServer(app);
@@ -103,8 +123,13 @@ const realtimeServer = createRealtimeServer(server, {
 });
 realtimePublisher.attach(realtimeServer, authService, customerService);
 
-server.listen(env.PORT, () => {
-  logger.info({ port: env.PORT }, "RestroFlow API listening");
+server.listen(env.PORT, env.HOST, () => {
+  logger.info({ host: env.HOST, port: env.PORT }, "RestroFlow API listening");
+});
+
+server.on("error", (error) => {
+  logger.fatal({ err: error }, "API server failed to start");
+  void prisma.$disconnect().finally(() => process.exit(1));
 });
 
 async function shutdown(signal: string) {

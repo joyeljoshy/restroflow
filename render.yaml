@@ -1,0 +1,39 @@
+services:
+  - type: web
+    runtime: node
+    name: restroflow-api
+    plan: free
+    buildCommand: npm ci && npm run build -w @restroflow/api
+    startCommand: npm run start -w @restroflow/api
+    healthCheckPath: /api/v1/health/live
+    autoDeployTrigger: "off"
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: LOG_LEVEL
+        value: info
+      - key: COOKIE_SAME_SITE
+        value: none
+      - key: TRUST_PROXY_HOPS
+        value: 1
+      - key: IMAGE_STORAGE_PROVIDER
+        value: cloudinary
+      - key: CLOUDINARY_FOLDER
+        value: restroflow/menu
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: PUBLIC_WEB_ORIGIN
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false

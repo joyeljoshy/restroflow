@@ -52,11 +52,15 @@ type AppOptions = {
   billingService?: BillingServiceContract;
   analyticsService?: AnalyticsServiceContract;
   customerCookieOptions?: SessionCookieOptions;
+  trustProxyHops?: number;
   version?: string;
 };
 
 export function createApp(options: AppOptions) {
   const app = express();
+  if ((options.trustProxyHops ?? 0) > 0) {
+    app.set("trust proxy", options.trustProxyHops);
+  }
   const healthService = new HealthService(
     options.healthRepository,
     options.version ?? "0.1.0",
