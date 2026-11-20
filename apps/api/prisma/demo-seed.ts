@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 
 import { createPrismaClient } from "../src/lib/prisma.js";
 import { Argon2PasswordHasher } from "../src/modules/auth/auth.service.js";
+import { demoSeedTransactionOptions } from "./demo-seed.config.js";
 
 const restaurantId = "12000000-0000-4000-8000-000000000001";
 const restaurantSlug = "the-urban-table-demo";
@@ -754,7 +755,7 @@ try {
         });
       }
     }
-  });
+  }, demoSeedTransactionOptions);
 
   console.info(
     `Demo seed prepared The Urban Table in ${databaseLabel} (${environment}). No credentials were printed.`,
