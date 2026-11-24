@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../../app.js";
 import { createPrismaClient } from "../../lib/prisma.js";
+import { isolatedTestDatabaseUrl } from "../../test/database-integration.js";
 import type { AuthServiceContract } from "../auth/auth.service.js";
 import { Argon2PasswordHasher } from "../auth/auth.service.js";
 import { PrismaOrderRepository } from "../orders/order.repository.js";
@@ -24,7 +25,7 @@ import type { RealtimePublisher } from "../realtime/realtime.publisher.js";
 import { PrismaCustomerRepository } from "./customer.repository.js";
 import { CustomerService } from "./customer.service.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = isolatedTestDatabaseUrl();
 const run = databaseUrl ? describe : describe.skip;
 
 run("customer QR ordering against PostgreSQL", () => {

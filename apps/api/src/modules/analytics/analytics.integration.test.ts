@@ -19,11 +19,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createApp } from "../../app.js";
 import { createPrismaClient } from "../../lib/prisma.js";
+import { isolatedTestDatabaseUrl } from "../../test/database-integration.js";
 import type { AuthServiceContract } from "../auth/auth.service.js";
 import { PrismaAnalyticsRepository } from "./analytics.repository.js";
 import { AnalyticsService } from "./analytics.service.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = isolatedTestDatabaseUrl();
 const run = databaseUrl ? describe : describe.skip;
 
 run("analytics API against PostgreSQL", () => {

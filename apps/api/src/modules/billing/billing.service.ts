@@ -31,6 +31,11 @@ export const PAYMENT_TRANSACTION_OPTIONS = {
   timeout: 30_000,
   lockTimeoutMs: 5_000,
 } satisfies BillingTransactionOptions;
+export const FINALIZATION_TRANSACTION_OPTIONS = {
+  maxWait: 10_000,
+  timeout: 30_000,
+  lockTimeoutMs: 5_000,
+} satisfies BillingTransactionOptions;
 
 export type BillChangeType = "FINALIZED" | "PAYMENT_RECORDED";
 
@@ -350,6 +355,7 @@ export class BillingService implements BillingServiceContract {
     private readonly repository: BillingRepository,
     private readonly publisher: BillingRealtimePublisher = new NoopBillingRealtimePublisher(),
     private readonly paymentTransactionOptions: BillingTransactionOptions = PAYMENT_TRANSACTION_OPTIONS,
+    private readonly finalizationTransactionOptions: BillingTransactionOptions = FINALIZATION_TRANSACTION_OPTIONS,
   ) {}
 
   async listActiveSessions(restaurantId: string) {
@@ -449,13 +455,27 @@ export class BillingService implements BillingServiceContract {
           membershipId,
           items: calculation.items,
         });
-      });
+      }, this.finalizationTransactionOptions);
     } catch (error) {
       if (isUniqueConstraintError(error))
         throw new AppError(
           409,
           "BILL_ALREADY_FINALIZED",
           "This table session already has a finalized bill.",
+        );
+      if (isLockTimeoutError(error))
+        throw new AppError(
+          503,
+          "BILL_FINALIZATION_BUSY",
+          "Bill finalization is busy. Try again shortly.",
+          { retryable: true },
+        );
+      if (isTransactionTimeoutError(error))
+        throw new AppError(
+          503,
+          "BILL_FINALIZATION_TIMEOUT",
+          "Bill finalization timed out. Try again shortly.",
+          { retryable: true },
         );
       throw error;
     }

@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../../app.js";
 import { createPrismaClient } from "../../lib/prisma.js";
+import { isolatedTestDatabaseUrl } from "../../test/database-integration.js";
 import type { AuthServiceContract } from "../auth/auth.service.js";
 import { PrismaOrderRepository } from "./order.repository.js";
 import { OrderService } from "./order.service.js";
@@ -23,7 +24,7 @@ import type { RealtimePublisher } from "../realtime/realtime.publisher.js";
 import { PrismaTableRepository } from "../tables/table.repository.js";
 import { TableService } from "../tables/table.service.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = isolatedTestDatabaseUrl();
 const run = databaseUrl ? describe : describe.skip;
 
 run("transactional order API against PostgreSQL", () => {
