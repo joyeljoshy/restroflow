@@ -1,5 +1,3 @@
-import "dotenv/config";
-
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
@@ -7,6 +5,10 @@ import { performance } from "node:perf_hooks";
 import pino from "pino";
 
 import { createApp } from "../app.js";
+import {
+  classifyDatabaseTarget,
+  requireBenchmarkDatabaseUrl,
+} from "../config/database-target.js";
 import { createPrismaClient } from "../lib/prisma.js";
 import { PrismaAnalyticsRepository } from "../modules/analytics/analytics.repository.js";
 import { AnalyticsService } from "../modules/analytics/analytics.service.js";
@@ -31,18 +33,12 @@ import { StaffService } from "../modules/staff/staff.service.js";
 import { PrismaTableRepository } from "../modules/tables/table.repository.js";
 import { TableService } from "../modules/tables/table.service.js";
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error("DATABASE_URL is required for load tests.");
 if (process.env.NODE_ENV === "production")
   throw new Error("API load tests are disabled in production.");
-const databaseHost = new URL(databaseUrl).hostname;
-if (
-  !["localhost", "127.0.0.1", "::1"].includes(databaseHost) &&
-  process.env.API_LOAD_TEST_ALLOW_REMOTE !== "1"
-)
-  throw new Error(
-    "Refusing to load-test a non-local database without API_LOAD_TEST_ALLOW_REMOTE=1.",
-  );
+const databaseUrl = requireBenchmarkDatabaseUrl(
+  process.env.DATABASE_URL,
+  process.env.API_LOAD_TEST_ALLOW_REMOTE === "1",
+);
 
 const prisma = createPrismaClient(databaseUrl);
 const suffix = randomUUID().slice(0, 8);
@@ -324,7 +320,7 @@ async function main() {
           scope: { restaurantId, isolatedFixture: true, production: false },
           environment: {
             node: process.version,
-            databaseHost,
+            databaseTarget: classifyDatabaseTarget(databaseUrl),
             cpuUserMs: Number((cpu.user / 1_000).toFixed(2)),
             cpuSystemMs: Number((cpu.system / 1_000).toFixed(2)),
             rssBeforeBytes: memoryBefore,

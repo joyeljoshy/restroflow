@@ -87,21 +87,29 @@ After the database-creation gate is approved:
    - exact Neon project/branch/database/role;
    - environment `production-demo`;
    - all 11 migration directory names from [database.md](./database.md);
-   - command `npm run db:migrate:deploy` with `DIRECT_URL` set securely;
+   - command `npm run db:migrate:deploy` with one direct URL set securely;
    - writes: yes, migration tables/schema will change;
    - backup: export/restore method and Free-plan history limitation;
    - rollback: restore to a new verified branch/database or apply a reviewed forward migration; never edit applied SQL.
 4. Wait for explicit production database approval.
-5. In a secure local shell/provider job with `DIRECT_URL` set, run:
+5. In an approved, disposable secure shell or provider job, inject the reviewed direct Neon TLS URL as exactly one of `DIRECT_URL` or `DATABASE_URL_UNPOOLED`. Clear test variables. The pooled runtime `DATABASE_URL` is optional here and, if supplied, must identify the same Neon endpoint and database. Set both flags only for the approved invocation. Keep them out of persistent environment files and all build/start jobs.
 
    ```powershell
-   npm run db:generate
-   npm.cmd exec -w @restroflow/api -- prisma migrate status
-   npm run db:migrate:deploy
-   npm.cmd exec -w @restroflow/api -- prisma migrate status
+   $env:PRISMA_DATABASE_MODE = 'production'
+   $env:PRISMA_PRODUCTION_MIGRATION_CONFIRM = 'APPLY_REVIEWED_PRODUCTION_MIGRATIONS'
+   try {
+     npm run db:migrate:deploy
+     if ($LASTEXITCODE -ne 0) { throw 'Production migration failed' }
+     npm run db:migrate:deploy -- --status
+     if ($LASTEXITCODE -ne 0) { throw 'Production migration status check failed' }
+   } finally {
+     Remove-Item Env:PRISMA_DATABASE_MODE, Env:PRISMA_PRODUCTION_MIGRATION_CONFIRM
+   }
    ```
 
-6. If migration fails, stop. Save sanitized output, do not reset/push, inspect `_prisma_migrations`, and decide on restore or forward repair before retrying.
+   To check status separately, use `npm run db:migrate:deploy -- --status` with the same approval flags and direct URL. A nonzero status can mean pending migrations or a failure. Inspect the state through the approved secure workflow before proceeding.
+
+6. If migration fails, stop. The wrapper reports the target class and exit status. Use the approved secure database workflow to inspect migration state, then decide on restore or forward repair before retrying.
 7. Confirm `/api/v1/health/ready` only after the Render runtime uses the pooled URL.
 
 ## Cloudinary Free

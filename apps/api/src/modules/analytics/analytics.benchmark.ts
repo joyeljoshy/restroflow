@@ -1,25 +1,17 @@
-import "dotenv/config";
-
 import { randomUUID } from "node:crypto";
 import { arch, cpus, platform } from "node:os";
 import { performance } from "node:perf_hooks";
 
+import { requireBenchmarkDatabaseUrl } from "../../config/database-target.js";
 import { createPrismaClient } from "../../lib/prisma.js";
 import { PrismaAnalyticsRepository } from "./analytics.repository.js";
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl)
-  throw new Error("DATABASE_URL is required for the benchmark.");
 if (process.env.NODE_ENV === "production")
   throw new Error("Analytics benchmarks are disabled in production.");
-const databaseHost = new URL(databaseUrl).hostname;
-if (
-  !["localhost", "127.0.0.1", "::1"].includes(databaseHost) &&
-  process.env.ANALYTICS_BENCHMARK_ALLOW_REMOTE !== "1"
-)
-  throw new Error(
-    "Refusing to benchmark a non-local database without ANALYTICS_BENCHMARK_ALLOW_REMOTE=1.",
-  );
+const databaseUrl = requireBenchmarkDatabaseUrl(
+  process.env.DATABASE_URL,
+  process.env.ANALYTICS_BENCHMARK_ALLOW_REMOTE === "1",
+);
 
 const prisma = createPrismaClient(databaseUrl);
 const repository = new PrismaAnalyticsRepository(prisma);

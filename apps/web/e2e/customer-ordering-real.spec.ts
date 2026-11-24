@@ -6,15 +6,8 @@ import pino from "pino";
 
 import "../../api/src/types/express.d.ts";
 
-if (!process.env.DATABASE_URL) {
-  try {
-    process.loadEnvFile("../api/.env");
-  } catch {
-    // The live browser test self-skips when no local/CI database is configured.
-  }
-}
-
 import { createApp } from "../../api/src/app.js";
+import { requireIsolatedTestDatabaseUrl } from "../../api/src/config/database-target.js";
 import { createPrismaClient } from "../../api/src/lib/prisma.js";
 import { PrismaAnalyticsRepository } from "../../api/src/modules/analytics/analytics.repository.js";
 import { AnalyticsService } from "../../api/src/modules/analytics/analytics.service.js";
@@ -44,19 +37,33 @@ import { StaffService } from "../../api/src/modules/staff/staff.service.js";
 import { PrismaTableRepository } from "../../api/src/modules/tables/table.repository.js";
 import { TableService } from "../../api/src/modules/tables/table.service.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+import {
+  requireLoopbackApiUrl,
+  restrictLiveApiRequests,
+} from "./isolated-live-api";
+
+const databaseUrl =
+  process.env.REAL_CUSTOMER_E2E === "1"
+    ? requireIsolatedTestDatabaseUrl()
+    : undefined;
 const liveApiUrl = process.env.REAL_CUSTOMER_API_URL ?? "http://localhost:4000";
-const liveApi = new URL(liveApiUrl);
+const liveApi = requireLoopbackApiUrl(liveApiUrl);
+const liveWeb = new URL(liveApi.origin);
+liveWeb.port = "3100";
 const liveApiPort = Number(
   liveApi.port || (liveApi.protocol === "https:" ? 443 : 80),
 );
 test.skip(
   !databaseUrl || process.env.REAL_CUSTOMER_E2E !== "1",
-  "Set REAL_CUSTOMER_E2E=1 with DATABASE_URL to run the live customer flow.",
+  "Set REAL_CUSTOMER_E2E=1 with an isolated TEST_DATABASE_URL to run the live customer flow.",
 );
 
 test.describe("live customer browser to kitchen flow", () => {
-  const prisma = createPrismaClient(databaseUrl!);
+  let prisma: ReturnType<typeof createPrismaClient>;
+
+  test.beforeEach(({ context }) =>
+    restrictLiveApiRequests(context, liveApi.origin),
+  );
   const suffix = randomUUID().slice(0, 8);
   const restaurantId = randomUUID();
   const userId = randomUUID();
@@ -70,6 +77,7 @@ test.describe("live customer browser to kitchen flow", () => {
   let realtimeServer: RealtimeServer | undefined;
 
   test.beforeAll(async () => {
+    prisma = createPrismaClient(databaseUrl!);
     const passwordHasher = new Argon2PasswordHasher();
     await prisma.restaurant.create({
       data: {
@@ -165,6 +173,7 @@ test.describe("live customer browser to kitchen flow", () => {
   });
 
   test.afterAll(async () => {
+    if (!prisma) return;
     const realtimeToClose = realtimeServer;
     const httpToClose = httpServer;
     if (realtimeToClose && httpToClose?.listening)
@@ -211,7 +220,7 @@ test.describe("live customer browser to kitchen flow", () => {
   }) => {
     const staff = await request.newContext({
       baseURL: liveApiUrl,
-      extraHTTPHeaders: { origin: "http://localhost:3100" },
+      extraHTTPHeaders: { origin: liveWeb.origin },
     });
     const login = await staff.post("/api/v1/auth/login", {
       data: { email, password },
@@ -270,7 +279,7 @@ test.describe("live customer browser to kitchen flow", () => {
       activation: { activationCode: string };
     };
 
-    await page.goto(`http://localhost:3100/menu/table/${identifier}`);
+    await page.goto(new URL(`/menu/table/${identifier}`, liveWeb).href);
     await expect(
       page.getByRole("heading", { name: /Live Browser Kitchen/ }),
     ).toBeVisible();
@@ -374,10 +383,24 @@ test.describe("live customer browser to kitchen flow", () => {
     );
     expect(closed.ok()).toBe(true);
 
-    const analytics = await staff.get(
-      "/api/v1/analytics/overview?startDate=2026-11-20&endDate=2026-11-21&granularity=day",
-      { headers: { "x-restaurant-id": restaurantId } },
-    );
+    const { finalizedAt } = await prisma.bill.findUniqueOrThrow({
+      where: { id: finalizedBody.bill.id },
+      select: { finalizedAt: true },
+    });
+    const restaurantDate = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const analytics = await staff.get("/api/v1/analytics/overview", {
+      headers: { "x-restaurant-id": restaurantId },
+      params: {
+        startDate: restaurantDate.format(finalizedAt),
+        endDate: restaurantDate.format(finalizedAt.getTime() + 86_400_000),
+        granularity: "day",
+      },
+    });
     expect(analytics.ok()).toBe(true);
     const analyticsBody = (await analytics.json()) as {
       overview: { finalizedSales: { value: string } };

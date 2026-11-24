@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { createHash } from "node:crypto";
 
+import { requireDemoSeedDatabaseUrl } from "../src/config/database-target.js";
 import { createPrismaClient } from "../src/lib/prisma.js";
 import { Argon2PasswordHasher } from "../src/modules/auth/auth.service.js";
 import { demoSeedTransactionOptions } from "./demo-seed.config.js";
@@ -29,7 +30,6 @@ function daysAgo(days: number, hour: number): Date {
   return value;
 }
 
-const databaseUrl = required("DATABASE_URL");
 const databaseLabel = required("DEMO_SEED_DATABASE_LABEL");
 const environment = required("DEMO_SEED_ENVIRONMENT");
 const confirmation = required("DEMO_SEED_CONFIRM");
@@ -49,6 +49,7 @@ if (
   );
 }
 
+const databaseUrl = requireDemoSeedDatabaseUrl(process.env, environment);
 const roles = ["ADMIN", "MANAGER", "WAITER", "KITCHEN", "CASHIER"] as const;
 const passwords = Object.fromEntries(
   roles.map((role) => [role, required(`DEMO_SEED_${role}_PASSWORD`)]),

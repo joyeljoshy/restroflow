@@ -4,6 +4,20 @@ import { loadEnvironment } from "./env.js";
 
 const databaseUrl = "postgresql://user:password@localhost:5432/restroflow";
 
+it("rejects remote databases during local API startup without printing the URL", () => {
+  const remoteDatabaseUrl =
+    "postgresql://fixture:secret@ep-example.neon.tech/demo";
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    expect(() => loadEnvironment({ DATABASE_URL: remoteDatabaseUrl })).toThrow(
+      "Invalid environment configuration",
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toContain(remoteDatabaseUrl);
+  } finally {
+    log.mockRestore();
+  }
+});
+
 describe("production environment validation", () => {
   it("accepts the explicit Vercel, Render, and Cloudinary configuration", () => {
     const env = loadEnvironment({
