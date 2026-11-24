@@ -64,8 +64,53 @@ function validateImage(contentType: string | undefined, data: Buffer): string {
 }
 
 export interface MenuImageStorage {
-  save(contentType: string | undefined, data: Buffer): Promise<string>;
+  save(
+    contentType: string | undefined,
+    data: Buffer,
+    diagnostics?: MenuImageDiagnostics,
+  ): Promise<string>;
 }
+
+export type MenuImageFailureStage =
+  | "sdk_callback"
+  | "missing_secure_url"
+  | "response_validation"
+  | "stream_error";
+
+type ProviderErrorCode =
+  | "EAI_AGAIN"
+  | "ECONNABORTED"
+  | "ECONNREFUSED"
+  | "ECONNRESET"
+  | "ENETUNREACH"
+  | "ENOTFOUND"
+  | "ETIMEDOUT";
+
+type MenuImageErrorCategory =
+  | "authentication"
+  | "invalid_request"
+  | "network"
+  | "provider_error"
+  | "rate_limit"
+  | "response_invalid"
+  | "timeout"
+  | "unknown";
+
+export type MenuImageFailureDiagnostic = {
+  requestId: string;
+  provider: "cloudinary";
+  stage: MenuImageFailureStage;
+  imageMimeType: string;
+  imageByteCount: number;
+  cloudinaryHttpStatus?: number;
+  providerErrorCode?: ProviderErrorCode;
+  errorCategory: MenuImageErrorCategory;
+};
+
+export type MenuImageDiagnostics = {
+  requestId: string;
+  logFailure(diagnostic: MenuImageFailureDiagnostic): void;
+};
 
 export class LocalMenuImageStorage implements MenuImageStorage {
   constructor(private readonly directory: string) {}
@@ -85,11 +130,102 @@ type CloudinaryUpload = (input: {
   publicId: string;
 }) => Promise<string>;
 
-export function createCloudinaryUpload(input: {
-  cloudName: string;
-  apiKey: string;
-  apiSecret: string;
-}): CloudinaryUpload {
+type CloudinaryUploadStream = {
+  once(event: "error", listener: (error: unknown) => void): unknown;
+  end(data: Buffer): void;
+};
+
+type CloudinaryUploadStreamFactory = (
+  options: {
+    resource_type: "image";
+    type: "upload";
+    folder: string;
+    public_id: string;
+    overwrite: false;
+    unique_filename: false;
+    use_filename: false;
+  },
+  callback: (error?: unknown, result?: { secure_url?: unknown }) => void,
+) => CloudinaryUploadStream;
+
+const providerErrorCodes = new Set<ProviderErrorCode>([
+  "EAI_AGAIN",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+]);
+
+function recordValue(error: unknown, key: string): unknown {
+  if (typeof error !== "object" || error === null || !(key in error))
+    return undefined;
+  return (error as Record<string, unknown>)[key];
+}
+
+function cloudinaryHttpStatus(error: unknown): number | undefined {
+  for (const key of ["http_code", "statusCode", "status"]) {
+    const value = recordValue(error, key);
+    if (
+      typeof value === "number" &&
+      Number.isInteger(value) &&
+      value >= 100 &&
+      value <= 599
+    )
+      return value;
+  }
+  return undefined;
+}
+
+function providerErrorCode(error: unknown): ProviderErrorCode | undefined {
+  const code = recordValue(error, "code");
+  return typeof code === "string" &&
+    providerErrorCodes.has(code as ProviderErrorCode)
+    ? (code as ProviderErrorCode)
+    : undefined;
+}
+
+function errorCategory(
+  stage: MenuImageFailureStage,
+  status: number | undefined,
+  code: ProviderErrorCode | undefined,
+): MenuImageErrorCategory {
+  if (stage === "missing_secure_url" || stage === "response_validation")
+    return "response_invalid";
+  if (code === "ETIMEDOUT" || code === "ECONNABORTED") return "timeout";
+  if (code) return "network";
+  if (status === 401 || status === 403) return "authentication";
+  if (status === 420 || status === 429) return "rate_limit";
+  if (status === 408 || status === 499 || status === 504) return "timeout";
+  if (status === 400 || status === 404) return "invalid_request";
+  if (status !== undefined && status >= 500) return "provider_error";
+  return "unknown";
+}
+
+class CloudinaryUploadFailure extends Error {
+  readonly cloudinaryHttpStatus?: number;
+  readonly providerErrorCode?: ProviderErrorCode;
+
+  constructor(
+    readonly stage: MenuImageFailureStage,
+    error?: unknown,
+  ) {
+    super("Cloudinary image upload failed");
+    this.name = "CloudinaryUploadFailure";
+    this.cloudinaryHttpStatus = cloudinaryHttpStatus(error);
+    this.providerErrorCode = providerErrorCode(error);
+  }
+}
+
+export function createCloudinaryUpload(
+  input: {
+    cloudName: string;
+    apiKey: string;
+    apiSecret: string;
+  },
+  uploadStream?: CloudinaryUploadStreamFactory,
+): CloudinaryUpload {
   cloudinary.config({
     cloud_name: input.cloudName,
     api_key: input.apiKey,
@@ -97,27 +233,52 @@ export function createCloudinaryUpload(input: {
     secure: true,
   });
 
+  const createUploadStream: CloudinaryUploadStreamFactory =
+    uploadStream ??
+    ((options, callback) =>
+      cloudinary.uploader.upload_stream(options, (error, result) =>
+        callback(error, result),
+      ));
+
   return ({ data, folder, publicId }) =>
     new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        {
-          resource_type: "image",
-          type: "upload",
-          folder,
-          public_id: publicId,
-          overwrite: false,
-          unique_filename: false,
-          use_filename: false,
-        },
-        (error, result) => {
-          if (error || !result?.secure_url) {
-            reject(new Error("Cloudinary upload failed"));
-            return;
-          }
-          resolve(result.secure_url);
-        },
-      );
-      stream.end(data);
+      let settled = false;
+      const fail = (stage: MenuImageFailureStage, error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(new CloudinaryUploadFailure(stage, error));
+      };
+
+      try {
+        const stream = createUploadStream(
+          {
+            resource_type: "image",
+            type: "upload",
+            folder,
+            public_id: publicId,
+            overwrite: false,
+            unique_filename: false,
+            use_filename: false,
+          },
+          (error, result) => {
+            if (error) {
+              fail("sdk_callback", error);
+              return;
+            }
+            if (typeof result?.secure_url !== "string") {
+              fail("missing_secure_url");
+              return;
+            }
+            if (settled) return;
+            settled = true;
+            resolve(result.secure_url);
+          },
+        );
+        stream.once("error", (error) => fail("stream_error", error));
+        stream.end(data);
+      } catch (error) {
+        fail("stream_error", error);
+      }
     });
 }
 
@@ -128,7 +289,11 @@ export class CloudinaryMenuImageStorage implements MenuImageStorage {
     private readonly upload: CloudinaryUpload,
   ) {}
 
-  async save(contentType: string | undefined, data: Buffer): Promise<string> {
+  async save(
+    contentType: string | undefined,
+    data: Buffer,
+    diagnostics?: MenuImageDiagnostics,
+  ): Promise<string> {
     validateImage(contentType, data);
     try {
       const reference = await this.upload({
@@ -136,16 +301,48 @@ export class CloudinaryMenuImageStorage implements MenuImageStorage {
         folder: this.folder,
         publicId: randomUUID(),
       });
-      const url = new URL(reference);
+      let url: URL;
+      try {
+        url = new URL(reference);
+      } catch {
+        throw new CloudinaryUploadFailure("response_validation");
+      }
       if (
         url.protocol !== "https:" ||
         url.hostname !== "res.cloudinary.com" ||
         !url.pathname.startsWith(`/${this.cloudName}/image/upload/`)
       ) {
-        throw new Error("Unexpected Cloudinary response URL");
+        throw new CloudinaryUploadFailure("response_validation");
       }
       return url.toString();
-    } catch {
+    } catch (error) {
+      const failure =
+        error instanceof CloudinaryUploadFailure
+          ? error
+          : new CloudinaryUploadFailure("sdk_callback", error);
+      const diagnostic: MenuImageFailureDiagnostic = {
+        requestId: diagnostics?.requestId ?? "unavailable",
+        provider: "cloudinary",
+        stage: failure.stage,
+        imageMimeType: contentType ?? "unknown",
+        imageByteCount: data.length,
+        ...(failure.cloudinaryHttpStatus === undefined
+          ? {}
+          : { cloudinaryHttpStatus: failure.cloudinaryHttpStatus }),
+        ...(failure.providerErrorCode === undefined
+          ? {}
+          : { providerErrorCode: failure.providerErrorCode }),
+        errorCategory: errorCategory(
+          failure.stage,
+          failure.cloudinaryHttpStatus,
+          failure.providerErrorCode,
+        ),
+      };
+      try {
+        diagnostics?.logFailure(diagnostic);
+      } catch {
+        // Diagnostic logging must never change the public upload failure.
+      }
       throw new AppError(
         502,
         "IMAGE_STORAGE_FAILED",
