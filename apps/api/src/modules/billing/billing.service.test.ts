@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type {
   BillingRepository,
+  BillingTransaction,
   BillingTransactionOptions,
 } from "./billing.repository.js";
 import {
@@ -59,6 +60,57 @@ describe("billing money policy", () => {
 });
 
 describe("payment transaction reliability", () => {
+  it("locks the bill before reserving the payment idempotency key", async () => {
+    const calls: string[] = [];
+    const sentinel = codedError("TEST_SENTINEL");
+    const transaction: BillingTransaction = {
+      lockSession: () => Promise.reject(new Error("unused")),
+      createBill: () => Promise.reject(new Error("unused")),
+      findPaymentIdempotency: () => {
+        calls.push("find-idempotency");
+        return Promise.resolve(null);
+      },
+      lockBill: () => {
+        calls.push("lock-bill");
+        return Promise.resolve(
+          {} as NonNullable<
+            Awaited<ReturnType<BillingTransaction["lockBill"]>>
+          >,
+        );
+      },
+      reservePaymentIdempotency: () => {
+        calls.push("reserve-idempotency");
+        return Promise.reject(sentinel);
+      },
+      createPayment: () => Promise.reject(new Error("unused")),
+      completePaymentIdempotency: () => Promise.reject(new Error("unused")),
+    };
+    const repository: BillingRepository = {
+      transaction: (work) => work(transaction),
+      findSession: () => Promise.resolve(null),
+      listActiveSessions: () => Promise.resolve([]),
+      findBill: () => Promise.resolve(null),
+      findBillBySession: () => Promise.resolve(null),
+      listBills: () => Promise.resolve({ records: [], total: 0 }),
+      findPaymentIdempotency: () => Promise.resolve(null),
+    };
+
+    await expect(
+      new BillingService(repository).recordPayment(
+        "restaurant-id",
+        "membership-id",
+        "bill-id",
+        "payment-key",
+        paymentInput,
+      ),
+    ).rejects.toBe(sentinel);
+    expect(calls).toEqual([
+      "find-idempotency",
+      "lock-bill",
+      "reserve-idempotency",
+    ]);
+  });
+
   it("uses explicit payment-only transaction bounds and maps Prisma expiry", async () => {
     let receivedOptions: BillingTransactionOptions | undefined;
     const service = new BillingService(
@@ -111,6 +163,33 @@ describe("payment transaction reliability", () => {
   });
 
   it.each([
+    codedError("40P01"),
+    codedError("P2010", { code: "40P01" }),
+    codedError("P2010", {
+      driverAdapterError: { cause: { originalCode: "40P01" } },
+    }),
+    codedError("P2039", {
+      driverAdapterError: { cause: { originalCode: "40P01" } },
+    }),
+  ])("maps PostgreSQL deadlock %# to a retryable error", async (error) => {
+    const service = new BillingService(failingRepository(error));
+
+    await expect(
+      service.recordPayment(
+        "restaurant-id",
+        "membership-id",
+        "bill-id",
+        "payment-key",
+        paymentInput,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "PAYMENT_BUSY",
+      details: { retryable: true },
+    });
+  });
+
+  it.each([
     codedError("P2039", {
       driverAdapterError: { cause: { originalCode: "23505" } },
     }),
@@ -119,8 +198,15 @@ describe("payment transaction reliability", () => {
     codedError("P2039", {
       driverAdapterError: { cause: { originalCode: 55_003 } },
     }),
+    codedError("P2039", { code: "40P01" }),
+    codedError("P2010", {
+      driverAdapterError: { cause: { originalCode: 40_001 } },
+    }),
     codedError("P2003", {
       driverAdapterError: { cause: { originalCode: "55P03" } },
+    }),
+    codedError("P2003", {
+      driverAdapterError: { cause: { originalCode: "40P01" } },
     }),
   ])(
     "does not map unrelated or malformed Prisma error %# as lock contention",
