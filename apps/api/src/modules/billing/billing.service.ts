@@ -115,20 +115,27 @@ function driverAdapterOriginalCode(error: unknown): unknown {
   );
 }
 
+function isPostgresError(error: unknown, postgresCode: string): boolean {
+  const code = errorCode(error);
+  if (code === postgresCode) return true;
+  if (code === "P2010")
+    return (
+      property(property(error, "meta"), "code") === postgresCode ||
+      driverAdapterOriginalCode(error) === postgresCode
+    );
+  return code === "P2039" && driverAdapterOriginalCode(error) === postgresCode;
+}
+
 function isTransactionTimeoutError(error: unknown): boolean {
   return errorCode(error) === "P2028";
 }
 
 function isLockTimeoutError(error: unknown): boolean {
-  if (errorCode(error) === "55P03") return true;
-  if (errorCode(error) === "P2010")
-    return (
-      property(property(error, "meta"), "code") === "55P03" ||
-      driverAdapterOriginalCode(error) === "55P03"
-    );
-  return (
-    errorCode(error) === "P2039" && driverAdapterOriginalCode(error) === "55P03"
-  );
+  return isPostgresError(error, "55P03");
+}
+
+function isDeadlockError(error: unknown): boolean {
+  return isPostgresError(error, "40P01");
 }
 
 function safeNumber(value: bigint, field: string): number {
@@ -551,6 +558,9 @@ export class BillingService implements BillingServiceContract {
         );
         if (inTransaction)
           return this.replayPayment(inTransaction, requestHash);
+        const current = await transaction.lockBill(restaurantId, billId);
+        if (!current)
+          throw new AppError(404, "BILL_NOT_FOUND", "Bill not found.");
         await transaction.reservePaymentIdempotency({
           restaurantId,
           membershipId,
@@ -559,9 +569,6 @@ export class BillingService implements BillingServiceContract {
           requestHash,
           expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS),
         });
-        const current = await transaction.lockBill(restaurantId, billId);
-        if (!current)
-          throw new AppError(404, "BILL_NOT_FOUND", "Bill not found.");
         if (current.status === "PAID")
           throw new AppError(
             409,
@@ -636,7 +643,7 @@ export class BillingService implements BillingServiceContract {
         if (!concurrent) throw error;
         return this.replayPayment(concurrent, requestHash);
       }
-      if (isLockTimeoutError(error))
+      if (isLockTimeoutError(error) || isDeadlockError(error))
         throw new AppError(
           503,
           "PAYMENT_BUSY",
