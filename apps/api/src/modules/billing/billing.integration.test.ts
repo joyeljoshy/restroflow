@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import {
   billPreviewResponseSchema,
@@ -21,14 +22,46 @@ import { PrismaTableRepository } from "../tables/table.repository.js";
 import { TableService } from "../tables/table.service.js";
 import { PrismaOrderRepository } from "../orders/order.repository.js";
 import { OrderService } from "../orders/order.service.js";
+import type {
+  BillingRepository,
+  BillingTransactionOptions,
+} from "./billing.repository.js";
 import { PrismaBillingRepository } from "./billing.repository.js";
 import {
   BillingService,
   type BillingRealtimePublisher,
 } from "./billing.service.js";
 
-const databaseUrl = process.env.DATABASE_URL;
-const run = databaseUrl ? describe : describe.skip;
+const databaseIntegrationRequested =
+  process.env.RUN_DATABASE_INTEGRATION_TESTS === "1";
+
+function requireIsolatedTestDatabase(): string | undefined {
+  if (!databaseIntegrationRequested) return undefined;
+  const value = process.env.TEST_DATABASE_URL;
+  if (!value)
+    throw new Error(
+      "TEST_DATABASE_URL is required when database integration tests are enabled.",
+    );
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("TEST_DATABASE_URL must be a valid PostgreSQL URL.");
+  }
+  if (!["postgres:", "postgresql:"].includes(url.protocol))
+    throw new Error("TEST_DATABASE_URL must use PostgreSQL.");
+  if (!["127.0.0.1", "localhost", "::1"].includes(url.hostname))
+    throw new Error(
+      "TEST_DATABASE_URL must use an isolated loopback database.",
+    );
+  const databaseName = decodeURIComponent(url.pathname.slice(1));
+  if (!databaseName.toLowerCase().includes("test"))
+    throw new Error("TEST_DATABASE_URL database name must include 'test'.");
+  return value;
+}
+
+const databaseUrl = requireIsolatedTestDatabase();
+const run = databaseIntegrationRequested ? describe : describe.skip;
 
 run("billing and payments API against PostgreSQL", () => {
   const prisma = createPrismaClient(databaseUrl!);
@@ -71,7 +104,11 @@ run("billing and payments API against PostgreSQL", () => {
     };
   }
 
-  function app(role: Role = "CASHIER", scope = restaurantId) {
+  function app(
+    role: Role = "CASHIER",
+    scope = restaurantId,
+    paymentTransactionOptions?: BillingTransactionOptions,
+  ) {
     const auth = authService(role, scope);
     const publisher: BillingRealtimePublisher = {
       billChanged: (event) => {
@@ -98,6 +135,7 @@ run("billing and payments API against PostgreSQL", () => {
       billingService: new BillingService(
         new PrismaBillingRepository(prisma),
         publisher,
+        paymentTransactionOptions,
       ),
       tableService: new TableService(
         new PrismaTableRepository(prisma),
@@ -450,6 +488,18 @@ run("billing and payments API against PostgreSQL", () => {
       .expect(201);
     expect(replay.body).toEqual(first.body);
     expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(1);
+    expect(
+      await prisma.paymentIdempotency.findFirst({
+        where: { billId: bill.id, key: "partial-payment-key" },
+        select: {
+          resultPaymentId: true,
+          responseBody: true,
+        },
+      }),
+    ).toMatchObject({
+      resultPaymentId: partial.payment.id,
+      responseBody: partial,
+    });
 
     const conflict = await request(app())
       .post(`/api/v1/bills/${bill.id}/payments`)
@@ -460,6 +510,25 @@ run("billing and payments API against PostgreSQL", () => {
     expect(errorResponseSchema.parse(conflict.body).error.code).toBe(
       "IDEMPOTENCY_KEY_REUSED",
     );
+
+    const overpayment = await request(app())
+      .post(`/api/v1/bills/${bill.id}/payments`)
+      .set("x-restaurant-id", restaurantId)
+      .set("idempotency-key", "overpayment-key")
+      .send({
+        ...partialBody,
+        amountMinor: 18_351,
+      })
+      .expect(409);
+    expect(errorResponseSchema.parse(overpayment.body).error.code).toBe(
+      "PAYMENT_EXCEEDS_BALANCE",
+    );
+    expect(
+      await prisma.paymentIdempotency.count({
+        where: { billId: bill.id, key: "overpayment-key" },
+      }),
+    ).toBe(0);
+    expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(1);
 
     const competing = await Promise.all([
       request(app())
@@ -494,6 +563,176 @@ run("billing and payments API against PostgreSQL", () => {
     expect(
       (await prisma.bill.findUniqueOrThrow({ where: { id: bill.id } })).status,
     ).toBe("PAID");
+  });
+
+  it("rolls back payment and idempotency writes when completion exceeds the transaction timeout", async () => {
+    const bill = await finalize();
+    const baseRepository = new PrismaBillingRepository(prisma);
+    const delayedRepository: BillingRepository = {
+      ...baseRepository,
+      transaction: (work, options) =>
+        baseRepository.transaction(
+          (transaction) =>
+            work({
+              ...transaction,
+              completePaymentIdempotency: async (input) => {
+                await delay(200);
+                await transaction.completePaymentIdempotency(input);
+              },
+            }),
+          options,
+        ),
+      findSession: (...args) => baseRepository.findSession(...args),
+      listActiveSessions: (...args) =>
+        baseRepository.listActiveSessions(...args),
+      findBill: (...args) => baseRepository.findBill(...args),
+      findBillBySession: (...args) => baseRepository.findBillBySession(...args),
+      listBills: (...args) => baseRepository.listBills(...args),
+      findPaymentIdempotency: (...args) =>
+        baseRepository.findPaymentIdempotency(...args),
+    };
+    const billing = new BillingService(delayedRepository, undefined, {
+      maxWait: 1_000,
+      timeout: 100,
+      lockTimeoutMs: 500,
+    });
+
+    await expect(
+      billing.recordPayment(
+        restaurantId,
+        membershipId,
+        bill.id,
+        "forced-timeout-key",
+        {
+          amountMinor: 1_000,
+          method: "CASH",
+          receivedExternally: true,
+        },
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "PAYMENT_TRANSACTION_TIMEOUT",
+    });
+    expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(0);
+    expect(
+      await prisma.paymentIdempotency.count({ where: { billId: bill.id } }),
+    ).toBe(0);
+    expect(
+      await prisma.bill.findUniqueOrThrow({
+        where: { id: bill.id },
+        select: { amountPaidMinor: true, status: true, version: true },
+      }),
+    ).toEqual({ amountPaidMinor: 0, status: "FINALIZED", version: 1 });
+  });
+
+  it("bounds bill-row contention, rolls back, and safely replays the retry", async () => {
+    const bill = await finalize();
+    const idempotencyKey = "lock-contention-key";
+    const paymentBody = {
+      amountMinor: 1_000,
+      method: "CASH",
+      receivedExternally: true,
+    } as const;
+    const lockClient = createPrismaClient(databaseUrl!);
+    let releaseLock = (): void => undefined;
+    const release = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let reportLocked = (): void => undefined;
+    const locked = new Promise<void>((resolve) => {
+      reportLocked = resolve;
+    });
+    const heldLock = lockClient.$transaction(
+      async (transaction) => {
+        await transaction.$queryRaw`
+          SELECT "id" FROM "Bill"
+          WHERE "id" = ${bill.id}::uuid
+          FOR UPDATE
+        `;
+        reportLocked();
+        await release;
+      },
+      { maxWait: 1_000, timeout: 5_000 },
+    );
+    await locked;
+    const contentionOptions = {
+      maxWait: 1_000,
+      timeout: 2_000,
+      lockTimeoutMs: 100,
+    } satisfies BillingTransactionOptions;
+
+    try {
+      const contention = await request(
+        app("CASHIER", restaurantId, contentionOptions),
+      )
+        .post(`/api/v1/bills/${bill.id}/payments`)
+        .set("x-restaurant-id", restaurantId)
+        .set("idempotency-key", idempotencyKey)
+        .send(paymentBody)
+        .expect(503);
+      expect(errorResponseSchema.parse(contention.body).error).toMatchObject({
+        code: "PAYMENT_BUSY",
+        details: { retryable: true },
+      });
+      expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(
+        0,
+      );
+      expect(
+        await prisma.paymentIdempotency.count({
+          where: { billId: bill.id, key: idempotencyKey },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.bill.findUniqueOrThrow({
+          where: { id: bill.id },
+          select: { amountPaidMinor: true, status: true, version: true },
+        }),
+      ).toEqual({ amountPaidMinor: 0, status: "FINALIZED", version: 1 });
+    } finally {
+      releaseLock();
+      await heldLock;
+      await lockClient.$disconnect();
+    }
+
+    const retry = await request(app())
+      .post(`/api/v1/bills/${bill.id}/payments`)
+      .set("x-restaurant-id", restaurantId)
+      .set("idempotency-key", idempotencyKey)
+      .send(paymentBody)
+      .expect(201);
+    const retryResult = paymentResponseSchema.parse(retry.body);
+    expect(retryResult.bill).toMatchObject({
+      amountPaidMinor: 1_000,
+      outstandingMinor: bill.totalMinor - 1_000,
+      status: "PARTIALLY_PAID",
+      version: 2,
+    });
+    expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(1);
+    expect(
+      await prisma.paymentIdempotency.findMany({
+        where: { billId: bill.id, key: idempotencyKey },
+        select: { resultPaymentId: true, responseBody: true },
+      }),
+    ).toEqual([
+      {
+        resultPaymentId: retryResult.payment.id,
+        responseBody: retryResult,
+      },
+    ]);
+
+    const replay = await request(app())
+      .post(`/api/v1/bills/${bill.id}/payments`)
+      .set("x-restaurant-id", restaurantId)
+      .set("idempotency-key", idempotencyKey)
+      .send(paymentBody)
+      .expect(201);
+    expect(replay.body).toEqual(retry.body);
+    expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(1);
+    expect(
+      await prisma.paymentIdempotency.count({
+        where: { billId: bill.id, key: idempotencyKey },
+      }),
+    ).toBe(1);
   });
 
   it("enforces roles, restaurant isolation, and paid-session closure", async () => {

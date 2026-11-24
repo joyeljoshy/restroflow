@@ -189,6 +189,12 @@ export type PaymentIdempotencyRecord = {
   responseBody: Prisma.JsonValue | null;
 };
 
+export type BillingTransactionOptions = {
+  maxWait: number;
+  timeout: number;
+  lockTimeoutMs?: number;
+};
+
 export type BillItemCreate = {
   sourceOrderItemId: string;
   orderNumberSnapshot: string;
@@ -263,6 +269,7 @@ export interface BillingTransaction {
 export interface BillingRepository {
   transaction<T>(
     work: (transaction: BillingTransaction) => Promise<T>,
+    options?: BillingTransactionOptions,
   ): Promise<T>;
   findSession(
     restaurantId: string,
@@ -435,9 +442,29 @@ function transactionRepository(
 export class PrismaBillingRepository implements BillingRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
-  transaction<T>(work: (transaction: BillingTransaction) => Promise<T>) {
-    return this.prisma.$transaction((client) =>
-      work(transactionRepository(client)),
+  transaction<T>(
+    work: (transaction: BillingTransaction) => Promise<T>,
+    options?: BillingTransactionOptions,
+  ) {
+    return this.prisma.$transaction(
+      async (client) => {
+        if (options?.lockTimeoutMs !== undefined) {
+          await client.$queryRaw<{ lockTimeout: string }[]>`
+            SELECT set_config(
+              'lock_timeout',
+              ${`${options.lockTimeoutMs}ms`},
+              true
+            ) AS "lockTimeout"
+          `;
+        }
+        return work(transactionRepository(client));
+      },
+      options
+        ? {
+            maxWait: options.maxWait,
+            timeout: options.timeout,
+          }
+        : undefined,
     );
   }
 

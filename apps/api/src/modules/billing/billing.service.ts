@@ -17,6 +17,7 @@ import { unresolvedOrderStatuses } from "../orders/order.policy.js";
 import type {
   BillingRepository,
   BillingSessionRecord,
+  BillingTransactionOptions,
   BillItemCreate,
   BillRecord,
   PaymentIdempotencyRecord,
@@ -25,6 +26,11 @@ import type {
 const MAX_DATABASE_INTEGER = 2_147_483_647n;
 export const BILL_ROUNDING_POLICY = "PER_LINE_HALF_UP_V1";
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+export const PAYMENT_TRANSACTION_OPTIONS = {
+  maxWait: 10_000,
+  timeout: 30_000,
+  lockTimeoutMs: 5_000,
+} satisfies BillingTransactionOptions;
 
 export type BillChangeType = "FINALIZED" | "PAYMENT_RECORDED";
 
@@ -82,6 +88,41 @@ function isUniqueConstraintError(error: unknown): boolean {
     error !== null &&
     "code" in error &&
     error.code === "P2002"
+  );
+}
+
+function errorCode(error: unknown): unknown {
+  if (typeof error !== "object" || error === null || !("code" in error))
+    return undefined;
+  return error.code;
+}
+
+function property(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null || !(key in value))
+    return undefined;
+  return value[key as keyof typeof value];
+}
+
+function driverAdapterOriginalCode(error: unknown): unknown {
+  return property(
+    property(property(property(error, "meta"), "driverAdapterError"), "cause"),
+    "originalCode",
+  );
+}
+
+function isTransactionTimeoutError(error: unknown): boolean {
+  return errorCode(error) === "P2028";
+}
+
+function isLockTimeoutError(error: unknown): boolean {
+  if (errorCode(error) === "55P03") return true;
+  if (errorCode(error) === "P2010")
+    return (
+      property(property(error, "meta"), "code") === "55P03" ||
+      driverAdapterOriginalCode(error) === "55P03"
+    );
+  return (
+    errorCode(error) === "P2039" && driverAdapterOriginalCode(error) === "55P03"
   );
 }
 
@@ -308,6 +349,7 @@ export class BillingService implements BillingServiceContract {
   constructor(
     private readonly repository: BillingRepository,
     private readonly publisher: BillingRealtimePublisher = new NoopBillingRealtimePublisher(),
+    private readonly paymentTransactionOptions: BillingTransactionOptions = PAYMENT_TRANSACTION_OPTIONS,
   ) {}
 
   async listActiveSessions(restaurantId: string) {
@@ -563,16 +605,32 @@ export class BillingService implements BillingServiceContract {
           ) as Prisma.InputJsonValue,
         });
         return response;
-      });
+      }, this.paymentTransactionOptions);
     } catch (error) {
-      if (!isUniqueConstraintError(error)) throw error;
-      const concurrent = await this.repository.findPaymentIdempotency(
-        restaurantId,
-        membershipId,
-        idempotencyKey,
-      );
-      if (!concurrent) throw error;
-      return this.replayPayment(concurrent, requestHash);
+      if (isUniqueConstraintError(error)) {
+        const concurrent = await this.repository.findPaymentIdempotency(
+          restaurantId,
+          membershipId,
+          idempotencyKey,
+        );
+        if (!concurrent) throw error;
+        return this.replayPayment(concurrent, requestHash);
+      }
+      if (isLockTimeoutError(error))
+        throw new AppError(
+          503,
+          "PAYMENT_BUSY",
+          "Another payment is currently updating this bill. Retry with the same idempotency key.",
+          { retryable: true },
+        );
+      if (isTransactionTimeoutError(error))
+        throw new AppError(
+          503,
+          "PAYMENT_TRANSACTION_TIMEOUT",
+          "The payment could not be completed within the transaction time limit. Retry with the same idempotency key.",
+          { retryable: true },
+        );
+      throw error;
     }
     await this.publisher.billChanged({
       restaurantId,
