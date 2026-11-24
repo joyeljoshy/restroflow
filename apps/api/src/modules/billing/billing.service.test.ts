@@ -8,6 +8,7 @@ import {
   BILL_ROUNDING_POLICY,
   BillingService,
   calculateLineTax,
+  FINALIZATION_TRANSACTION_OPTIONS,
   PAYMENT_TRANSACTION_OPTIONS,
 } from "./billing.service.js";
 
@@ -137,4 +138,65 @@ describe("payment transaction reliability", () => {
       ).rejects.toBe(error);
     },
   );
+});
+
+describe("bill finalization transaction reliability", () => {
+  it("uses explicit finalization-only transaction bounds and maps Prisma expiry", async () => {
+    let receivedOptions: BillingTransactionOptions | undefined;
+    const service = new BillingService(
+      failingRepository(codedError("P2028"), (options) => {
+        receivedOptions = options;
+      }),
+    );
+
+    await expect(
+      service.finalize("restaurant-id", "membership-id", "session-id"),
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "BILL_FINALIZATION_TIMEOUT",
+      details: { retryable: true },
+    });
+    expect(receivedOptions).toEqual(FINALIZATION_TRANSACTION_OPTIONS);
+  });
+
+  it.each([
+    codedError("55P03"),
+    codedError("P2010", { code: "55P03" }),
+    codedError("P2010", {
+      driverAdapterError: { cause: { originalCode: "55P03" } },
+    }),
+    codedError("P2039", {
+      driverAdapterError: { cause: { originalCode: "55P03" } },
+    }),
+  ])(
+    "maps verified lock timeout %# to BILL_FINALIZATION_BUSY",
+    async (error) => {
+      const service = new BillingService(failingRepository(error));
+
+      await expect(
+        service.finalize("restaurant-id", "membership-id", "session-id"),
+      ).rejects.toMatchObject({
+        statusCode: 503,
+        code: "BILL_FINALIZATION_BUSY",
+        details: { retryable: true },
+      });
+    },
+  );
+
+  it.each([
+    codedError("P2039", {
+      driverAdapterError: { cause: { originalCode: "23505" } },
+    }),
+    codedError("P2039"),
+    codedError("P2039", { driverAdapterError: {} }),
+    codedError("P2003", {
+      driverAdapterError: { cause: { originalCode: "55P03" } },
+    }),
+  ])("preserves unrelated database error %#", async (error) => {
+    const service = new BillingService(failingRepository(error));
+
+    await expect(
+      service.finalize("restaurant-id", "membership-id", "session-id"),
+    ).rejects.toBe(error);
+  });
 });
