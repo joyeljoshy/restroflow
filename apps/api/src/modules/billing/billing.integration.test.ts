@@ -653,6 +653,178 @@ run("billing and payments API against PostgreSQL", () => {
     ).toBe("PAID");
   });
 
+  it("replays concurrent requests that use the same idempotency key without duplicating payment", async () => {
+    const bill = await finalize();
+    const baseRepository = new PrismaBillingRepository(prisma);
+    let lookupCount = 0;
+    let releaseLookups = (): void => undefined;
+    const lookupsReady = new Promise<void>((resolve) => {
+      releaseLookups = resolve;
+    });
+    const concurrentRepository: BillingRepository = {
+      transaction: (...args) => baseRepository.transaction(...args),
+      findSession: (...args) => baseRepository.findSession(...args),
+      listActiveSessions: (...args) =>
+        baseRepository.listActiveSessions(...args),
+      findBill: (...args) => baseRepository.findBill(...args),
+      findBillBySession: (...args) => baseRepository.findBillBySession(...args),
+      listBills: (...args) => baseRepository.listBills(...args),
+      findPaymentIdempotency: async (...args) => {
+        lookupCount += 1;
+        if (lookupCount <= 2) {
+          if (lookupCount === 2) releaseLookups();
+          await lookupsReady;
+        }
+        return baseRepository.findPaymentIdempotency(...args);
+      },
+    };
+    const billing = new BillingService(concurrentRepository);
+    const idempotencyKey = "same-concurrent-key";
+    const paymentBody = {
+      amountMinor: 10_000,
+      method: "CASH",
+      receivedExternally: true,
+    } as const;
+
+    const [first, second] = await Promise.all([
+      billing.recordPayment(
+        restaurantId,
+        membershipId,
+        bill.id,
+        idempotencyKey,
+        paymentBody,
+      ),
+      billing.recordPayment(
+        restaurantId,
+        membershipId,
+        bill.id,
+        idempotencyKey,
+        paymentBody,
+      ),
+    ]);
+
+    expect(second).toEqual(first);
+    expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(1);
+    expect(
+      await prisma.paymentIdempotency.findMany({
+        where: { billId: bill.id, key: idempotencyKey },
+        select: { resultPaymentId: true, responseBody: true },
+      }),
+    ).toEqual([
+      {
+        resultPaymentId: first.payment.id,
+        responseBody: first,
+      },
+    ]);
+    expect(
+      await prisma.bill.findUniqueOrThrow({
+        where: { id: bill.id },
+        select: { amountPaidMinor: true, status: true, version: true },
+      }),
+    ).toEqual({
+      amountPaidMinor: 10_000,
+      status: "PARTIALLY_PAID",
+      version: 2,
+    });
+  });
+
+  it("rolls back a deadlocked payment and safely retries with the same idempotency key", async () => {
+    const bill = await finalize();
+    const baseRepository = new PrismaBillingRepository(prisma);
+    let injectDeadlock = true;
+    const deadlockRepository: BillingRepository = {
+      transaction: (work, options) =>
+        baseRepository.transaction(
+          (transaction) =>
+            work({
+              ...transaction,
+              reservePaymentIdempotency: async (input) => {
+                await transaction.reservePaymentIdempotency(input);
+                if (injectDeadlock) {
+                  injectDeadlock = false;
+                  throw Object.assign(new Error("Test database deadlock"), {
+                    code: "P2010",
+                    meta: {
+                      driverAdapterError: {
+                        cause: { originalCode: "40P01" },
+                      },
+                    },
+                  });
+                }
+              },
+            }),
+          options,
+        ),
+      findSession: (...args) => baseRepository.findSession(...args),
+      listActiveSessions: (...args) =>
+        baseRepository.listActiveSessions(...args),
+      findBill: (...args) => baseRepository.findBill(...args),
+      findBillBySession: (...args) => baseRepository.findBillBySession(...args),
+      listBills: (...args) => baseRepository.listBills(...args),
+      findPaymentIdempotency: (...args) =>
+        baseRepository.findPaymentIdempotency(...args),
+    };
+    const billing = new BillingService(deadlockRepository);
+    const idempotencyKey = "deadlock-retry-key";
+    const paymentBody = {
+      amountMinor: 1_000,
+      method: "CASH",
+      receivedExternally: true,
+    } as const;
+
+    await expect(
+      billing.recordPayment(
+        restaurantId,
+        membershipId,
+        bill.id,
+        idempotencyKey,
+        paymentBody,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "PAYMENT_BUSY",
+      details: { retryable: true },
+    });
+    expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(0);
+    expect(
+      await prisma.paymentIdempotency.count({
+        where: { billId: bill.id, key: idempotencyKey },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.bill.findUniqueOrThrow({
+        where: { id: bill.id },
+        select: { amountPaidMinor: true, status: true, version: true },
+      }),
+    ).toEqual({ amountPaidMinor: 0, status: "FINALIZED", version: 1 });
+
+    const retry = await billing.recordPayment(
+      restaurantId,
+      membershipId,
+      bill.id,
+      idempotencyKey,
+      paymentBody,
+    );
+    expect(retry.bill).toMatchObject({
+      amountPaidMinor: 1_000,
+      outstandingMinor: bill.totalMinor - 1_000,
+      status: "PARTIALLY_PAID",
+      version: 2,
+    });
+    expect(await prisma.payment.count({ where: { billId: bill.id } })).toBe(1);
+    expect(
+      await prisma.paymentIdempotency.findMany({
+        where: { billId: bill.id, key: idempotencyKey },
+        select: { resultPaymentId: true, responseBody: true },
+      }),
+    ).toEqual([
+      {
+        resultPaymentId: retry.payment.id,
+        responseBody: retry,
+      },
+    ]);
+  });
+
   it("rolls back payment and idempotency writes when completion exceeds the transaction timeout", async () => {
     const bill = await finalize();
     const baseRepository = new PrismaBillingRepository(prisma);
