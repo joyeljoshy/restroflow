@@ -6,15 +6,8 @@ import pino from "pino";
 
 import "../../api/src/types/express.d.ts";
 
-if (!process.env.DATABASE_URL) {
-  try {
-    process.loadEnvFile("../api/.env");
-  } catch {
-    // The live test self-skips when no local/CI database is configured.
-  }
-}
-
 import { createApp } from "../../api/src/app.js";
+import { requireIsolatedTestDatabaseUrl } from "../../api/src/config/database-target.js";
 import { createPrismaClient } from "../../api/src/lib/prisma.js";
 import { PrismaAuthRepository } from "../../api/src/modules/auth/auth.repository.js";
 import {
@@ -31,9 +24,17 @@ import { StaffService } from "../../api/src/modules/staff/staff.service.js";
 import { PrismaTableRepository } from "../../api/src/modules/tables/table.repository.js";
 import { TableService } from "../../api/src/modules/tables/table.service.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+import {
+  requireLoopbackApiUrl,
+  restrictLiveApiRequests,
+} from "./isolated-live-api";
+
+const databaseUrl =
+  process.env.REAL_BILLING_E2E === "1"
+    ? requireIsolatedTestDatabaseUrl()
+    : undefined;
 const liveApiUrl = process.env.REAL_BILLING_API_URL ?? "http://127.0.0.1:4011";
-const liveApi = new URL(liveApiUrl);
+const liveApi = requireLoopbackApiUrl(liveApiUrl);
 const liveApiPort = Number(liveApi.port || 80);
 
 test.skip(
@@ -42,7 +43,11 @@ test.skip(
 );
 
 test.describe("live browser billing flow", () => {
-  const prisma = createPrismaClient(databaseUrl!);
+  let prisma: ReturnType<typeof createPrismaClient>;
+
+  test.beforeEach(({ context }) =>
+    restrictLiveApiRequests(context, liveApi.origin),
+  );
   const suffix = randomUUID().slice(0, 8);
   const restaurantId = randomUUID();
   const userId = randomUUID();
@@ -56,6 +61,7 @@ test.describe("live browser billing flow", () => {
   let httpServer: HttpServer | undefined;
 
   test.beforeAll(async () => {
+    prisma = createPrismaClient(databaseUrl!);
     const passwordHasher = new Argon2PasswordHasher();
     await prisma.restaurant.create({
       data: {
@@ -169,6 +175,7 @@ test.describe("live browser billing flow", () => {
   });
 
   test.afterAll(async () => {
+    if (!prisma) return;
     if (httpServer?.listening)
       await new Promise<void>((resolve) => httpServer!.close(() => resolve()));
     await prisma.paymentIdempotency.deleteMany({ where: { restaurantId } });

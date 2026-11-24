@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { classifyDatabaseTarget } from "./database-target.js";
+
 const envSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -49,6 +51,14 @@ export function loadEnvironment(
 
   const env = parsed.data;
   const productionErrors: Record<string, string[]> = {};
+  if (
+    env.NODE_ENV !== "production" &&
+    classifyDatabaseTarget(env.DATABASE_URL) !== "LOCAL_LOOPBACK"
+  ) {
+    productionErrors.DATABASE_URL = [
+      "Non-production API startup requires a valid loopback PostgreSQL target.",
+    ];
+  }
   for (const origin of env.CORS_ORIGINS) {
     try {
       const url = new URL(origin);

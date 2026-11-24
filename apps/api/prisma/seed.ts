@@ -1,13 +1,8 @@
-import "dotenv/config";
-
+import { requireDevelopmentDatabaseUrl } from "../src/config/database-target.js";
 import { Argon2PasswordHasher } from "../src/modules/auth/auth.service.js";
 import { createPrismaClient } from "../src/lib/prisma.js";
 
-const databaseUrl = process.env.DATABASE_URL;
-
-if (!databaseUrl) {
-  throw new Error("DATABASE_URL is required to run the seed script.");
-}
+const databaseUrl = requireDevelopmentDatabaseUrl();
 
 const prisma = createPrismaClient(databaseUrl);
 

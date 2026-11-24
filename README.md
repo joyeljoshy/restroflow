@@ -80,12 +80,15 @@ Copy-Item apps/api/.env.example apps/api/.env
 Copy-Item apps/web/.env.example apps/web/.env.local
 docker compose up -d postgres
 npm run db:generate
-npm run db:migrate:deploy
+$env:DATABASE_URL = 'postgresql://restroflow:<local-password>@127.0.0.1:5432/restroflow'
+npm run db:migrate
 npm run db:seed
 npm run dev
 ```
 
 Replace the local PostgreSQL password placeholders in `.env` and `apps/api/.env` with the same local-only value. The default seed verifies connectivity and performs no writes unless all optional development-admin variables are supplied.
+
+Supply the loopback URL in the current shell for the migration and seed commands. See [database target selection](./docs/database.md#database-target-selection) for isolated test setup and conflict recovery.
 
 - Web: `http://localhost:3000`
 - API liveness: `http://localhost:4000/api/v1/health/live`
@@ -95,21 +98,22 @@ Never commit `.env` files. `NEXT_PUBLIC_API_URL` is public by design; database, 
 
 ## Commands
 
-| Command                               | Purpose                                            |
-| ------------------------------------- | -------------------------------------------------- |
-| `npm run dev`                         | Start the web and API development servers          |
-| `npm run build`                       | Build contracts, API, and web production artifacts |
-| `npm run format:check`                | Verify Prettier formatting                         |
-| `npm run lint`                        | Run workspace ESLint checks                        |
-| `npm run typecheck`                   | Run strict TypeScript and Prisma generation checks |
-| `npm test`                            | Run workspace unit/integration tests               |
-| `npm run test:e2e`                    | Run standard Playwright journeys                   |
-| `npm run db:generate`                 | Generate the Prisma client                         |
-| `npm run db:migrate -- --name <name>` | Create a local development migration               |
-| `npm run db:migrate:deploy`           | Apply reviewed committed migrations                |
-| `npm run db:seed`                     | Connectivity check / optional local admin seed     |
-| `npm run db:seed:demo`                | Explicit, guarded synthetic demo fixture           |
-| `npm run load:test`                   | Run the isolated local API load harness            |
+| Command                               | Purpose                                                 |
+| ------------------------------------- | ------------------------------------------------------- |
+| `npm run dev`                         | Start the web and API development servers               |
+| `npm run build`                       | Build contracts, API, and web production artifacts      |
+| `npm run format:check`                | Verify Prettier formatting                              |
+| `npm run lint`                        | Run workspace ESLint checks                             |
+| `npm run typecheck`                   | Run strict TypeScript and Prisma generation checks      |
+| `npm test`                            | Run workspace unit/integration tests                    |
+| `npm run test:e2e`                    | Run standard Playwright journeys                        |
+| `npm run db:generate`                 | Generate the Prisma client                              |
+| `npm run db:migrate -- --name <name>` | Create a local development migration                    |
+| `npm run db:migrate:test`             | Apply committed migrations to an isolated test database |
+| `npm run db:migrate:deploy`           | Apply reviewed production migrations after approval     |
+| `npm run db:seed`                     | Connectivity check / optional local admin seed          |
+| `npm run db:seed:demo`                | Explicit, guarded synthetic demo fixture                |
+| `npm run load:test`                   | Run the isolated local API load harness                 |
 
 Production uses reviewed `prisma migrate deploy`; it never uses `migrate reset`, destructive `db push`, or automatic migrations in API startup. The safe Neon workflow and approval gate are documented in [deployment.md](./docs/deployment.md).
 

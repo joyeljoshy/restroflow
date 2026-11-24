@@ -69,7 +69,7 @@ function testPassword(role: string, index: number): string {
 }
 
 const environment = {
-  DATABASE_URL: "unused-by-mocked-client",
+  DATABASE_URL: "postgresql://fixture@127.0.0.1/restroflow_test",
   DEMO_SEED_DATABASE_LABEL: "isolated-test",
   DEMO_SEED_ENVIRONMENT: "local",
   DEMO_SEED_CONFIRM: "CREATE_THE_URBAN_TABLE",
