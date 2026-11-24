@@ -204,6 +204,11 @@ export class MenuController {
     const imageUrl = await this.imageStorage.save(
       req.header("content-type"),
       Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+      {
+        requestId: typeof req.id === "string" ? req.id : "unavailable",
+        logFailure: (diagnostic) =>
+          req.log?.error(diagnostic, "Cloudinary menu image upload failed"),
+      },
     );
     res.status(201).json({ imageUrl });
   };
