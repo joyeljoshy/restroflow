@@ -22,7 +22,7 @@ Audit date: 2026-11-20. Scope: current local worktree and the selected free prov
 2. Render: the API compiles to `apps/api/dist/server.js`; the native Node build/start commands in `render.yaml` use the production entry point.
 3. Socket.IO: REST and Socket.IO share one HTTP server and Render supports WebSocket upgrades on the service port.
 4. Prisma/Neon: Prisma 7 uses the PostgreSQL driver adapter and accepts Neon PostgreSQL URLs.
-5. Migrations: all 11 committed migrations can be deployed with the direct URL and `prisma migrate deploy`; no reset/push is needed.
+5. Migrations: apply the 11 committed migrations with the direct URL and the approved `npm run db:migrate:deploy` workflow in [deployment.md](./deployment.md).
 6. TLS: production connection strings must be copied with Neon TLS parameters; no plaintext production URL is documented.
 7. Images: production requires Cloudinary; local filesystem remains development-only.
 8. Cookies: production uses HTTP-only, secure, `SameSite=None`; live browser policy is the remaining external risk.

@@ -15,11 +15,12 @@
     "benchmark:analytics": "npm run build && node dist/modules/analytics/analytics.benchmark.js",
     "load:test": "npm run build && node dist/performance/api-load-test.js",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:migrate:deploy": "prisma migrate deploy",
-    "db:seed": "prisma db seed",
+    "db:migrate": "tsx scripts/prisma-command.ts migrate-development",
+    "db:migrate:test": "tsx scripts/prisma-command.ts migrate-test",
+    "db:migrate:deploy": "tsx scripts/prisma-command.ts migrate-production",
+    "db:seed": "tsx prisma/seed.ts",
     "db:seed:demo": "tsx prisma/demo-seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "tsx scripts/prisma-command.ts studio"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.0.0",

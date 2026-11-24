@@ -26,7 +26,7 @@ npm.cmd exec -w @restroflow/api -- prisma validate
 git diff --check
 ```
 
-With local PostgreSQL running, additionally run `npm run db:migrate:deploy` and `prisma migrate status` against the local URL only. Never point these commands to Neon without the database gate.
+With isolated loopback PostgreSQL running, set `RUN_DATABASE_INTEGRATION_TESTS=1` and its `TEST_DATABASE_URL`, then run `npm run db:migrate:test` before `npm test`. See [database target selection](./database.md#database-target-selection).
 
 Focused Part 12 evidence includes production environment acceptance/rejection, `SameSite=None; Secure` staff cookies, exact origin rejection, Cloudinary adapter success/failure/URL validation with a mock uploader, health separation, compiled startup, workspace runtime imports, and existing isolation/concurrency suites.
 
