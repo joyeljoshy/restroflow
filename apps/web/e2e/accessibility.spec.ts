@@ -69,7 +69,7 @@ test("public customer menu has no serious automated accessibility violations", a
   await page.route("**/api/v1/auth/me", (route) =>
     json(route, { error: { code: "UNAUTHENTICATED" } }, 401),
   );
-  await page.route("**/api/v1/public/**", async (route) => {
+  await page.route("**/api/customer/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith(`/tables/${identifier}/menu`)) {
       await json(route, {

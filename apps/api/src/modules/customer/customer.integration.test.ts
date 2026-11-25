@@ -10,11 +10,11 @@ import {
   publicTableResponseSchema,
   tableOrderingActivationResponseSchema,
 } from "@restroflow/contracts";
-import pino from "pino";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../../app.js";
+import { createLogger } from "../../lib/logger.js";
 import { createPrismaClient } from "../../lib/prisma.js";
 import { isolatedTestDatabaseUrl } from "../../test/database-integration.js";
 import type { AuthServiceContract } from "../auth/auth.service.js";
@@ -83,15 +83,18 @@ run("customer QR ordering against PostgreSQL", () => {
     new Argon2PasswordHasher(),
     orderService,
   );
+  const proxySecret = "a".repeat(64);
+  const logs: string[] = [];
   const app = createApp({
     allowedOrigins: ["http://localhost:3000"],
     authService,
     cookieOptions: { secure: false, maxAgeMs: 60_000 },
     customerService,
+    customerProxySecret: proxySecret,
     customerCookieOptions: { secure: false, maxAgeMs: 4 * 60 * 60 * 1000 },
     healthRepository: { isDatabaseAvailable: () => Promise.resolve(true) },
     loginRateLimitMax: 50,
-    logger: pino({ enabled: false }),
+    logger: createLogger("info", { write: (line: string) => logs.push(line) }),
     restaurantService: {
       get: () => Promise.reject(new Error("unused")),
       update: () => Promise.reject(new Error("unused")),
@@ -429,5 +432,99 @@ run("customer QR ordering against PostgreSQL", () => {
       },
     });
     await firstAgent.get("/api/v1/public/orders").expect(401);
+  });
+
+  it("rejects an expired code and consumes a fresh code only once", async () => {
+    const issue = async () =>
+      tableOrderingActivationResponseSchema.parse(
+        (
+          await request(app)
+            .post(`/api/v1/table-sessions/${tableSessionId}/customer-access`)
+            .set("Cookie", "restroflow_session=staff-token")
+            .set("x-restaurant-id", restaurantId)
+            .expect(201)
+        ).body,
+      ).activation;
+    const expired = await issue();
+    await prisma.tableOrderingActivation.updateMany({
+      where: { tableSessionId, revokedAt: null },
+      data: {
+        createdAt: new Date(Date.now() - 700_000),
+        expiresAt: new Date(Date.now() - 100_000),
+      },
+    });
+    const submit = (activationCode: string) =>
+      request(app)
+        .post("/api/v1/public/table-access/activate")
+        .send({ identifier, activationCode });
+    await submit(expired.activationCode).expect(401);
+    const fresh = await issue();
+    const attempts = await Promise.all([
+      submit(fresh.activationCode),
+      submit(fresh.activationCode),
+    ]);
+    expect(attempts.map((attempt) => attempt.status).sort()).toEqual([
+      201, 401,
+    ]);
+    expect(
+      await prisma.customerOrderingSession.count({ where: { tableSessionId } }),
+    ).toBe(1);
+    await submit(fresh.activationCode).expect(401);
+  });
+
+  it("rejects invalid proxy claims before reading customer data and redacts credentials", async () => {
+    const invalidSecret = "b".repeat(64);
+    const path = `/api/v1/public/tables/${identifier}/menu`;
+    const read = () => request(app).get(path);
+    await read().expect(200);
+    await read().set("x-customer-client-ip", "192.0.2.10").expect(403);
+    await read().set("x-customer-proxy-secret", proxySecret).expect(403);
+    await read()
+      .set("x-customer-proxy-secret", "malformed-test-credential")
+      .set("x-customer-client-ip", "192.0.2.10")
+      .expect(403);
+    const denied = await read()
+      .set("x-customer-proxy-secret", invalidSecret)
+      .set("x-customer-client-ip", "192.0.2.10")
+      .expect(403);
+    expect(denied.body).toMatchObject({
+      error: { code: "CUSTOMER_PROXY_FORBIDDEN" },
+    });
+    await read()
+      .set("x-customer-proxy-secret", proxySecret)
+      .set("x-customer-client-ip", "invalid-address")
+      .expect(403);
+    await read()
+      .set("x-customer-proxy-secret", proxySecret)
+      .set("x-customer-client-ip", "192.0.2.10")
+      .expect(200);
+    const output = logs.join("");
+    expect(output).toContain("CUSTOMER_PROXY_FORBIDDEN");
+    expect(output).not.toContain(proxySecret);
+    expect(output).not.toContain(invalidSecret);
+    expect(output).not.toContain("malformed-test-credential");
+  });
+
+  it("separates verified proxy rate limits and ignores forged forwarding on direct requests", async () => {
+    const submit = (clientIp: string, secret: string) =>
+      request(app)
+        .post("/api/v1/public/table-access/activate")
+        .set("x-customer-client-ip", clientIp)
+        .set("x-customer-proxy-secret", secret)
+        .send({});
+    for (let attempt = 0; attempt < 20; attempt++)
+      await submit("192.0.2.10", proxySecret).expect(400);
+    await submit("192.0.2.10", proxySecret).expect(429);
+    await submit("192.0.2.11", "invalid").expect(403);
+    await submit("192.0.2.11", proxySecret).expect(400);
+    const direct = (ip: string) =>
+      request(app)
+        .post("/api/v1/public/table-access/activate")
+        .set("x-forwarded-for", ip)
+        .set("x-real-ip", ip)
+        .send({});
+    for (let attempt = 0; attempt < 20; attempt++)
+      await direct(`198.51.100.${attempt + 1}`);
+    await direct("198.51.100.21").expect(429);
   });
 });

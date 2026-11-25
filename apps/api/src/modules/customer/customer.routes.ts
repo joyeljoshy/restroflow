@@ -1,3 +1,6 @@
+import { timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
+import type { Request } from "express";
 import {
   activateCustomerSessionRequestSchema,
   customerCreateOrderRequestSchema,
@@ -6,8 +9,9 @@ import {
   publicTableIdentifierParamsSchema,
 } from "@restroflow/contracts";
 import { Router } from "express";
-import { rateLimit } from "express-rate-limit";
+import { ipKeyGenerator, rateLimit } from "express-rate-limit";
 
+import { AppError } from "../../errors/app-error.js";
 import { validateRequest } from "../../middleware/validate-request.js";
 import { requireTrustedOrigin } from "../../middleware/trusted-origin.js";
 import {
@@ -28,16 +32,53 @@ export function createCustomerRouter(
   staffCookieOptions: SessionCookieOptions,
   customerCookieOptions: SessionCookieOptions,
   allowedOrigins: string[],
+  proxySecret?: string,
 ) {
   const router = Router();
   const commandOrigin = requireTrustedOrigin(allowedOrigins);
+  const verifiedClientIps = new WeakMap<Request, string>();
+  const expected = proxySecret ? Buffer.from(proxySecret) : undefined;
+  router.use("/public", (req, _res, next) => {
+    const claimedIp = req.get("x-customer-client-ip");
+    const credential = req.get("x-customer-proxy-secret");
+    if (claimedIp === undefined && credential === undefined) {
+      next();
+      return;
+    }
+    if (
+      !expected ||
+      !credential ||
+      !/^[0-9a-f]{64}$/.test(credential) ||
+      expected.length !== 64 ||
+      !timingSafeEqual(expected, Buffer.from(credential)) ||
+      !claimedIp ||
+      !isIP(claimedIp)
+    ) {
+      next(
+        new AppError(
+          403,
+          "CUSTOMER_PROXY_FORBIDDEN",
+          "Invalid customer proxy credentials.",
+        ),
+      );
+      return;
+    }
+    verifiedClientIps.set(req, claimedIp);
+    next();
+  });
+  const customerRateKey = (req: Request) =>
+    ipKeyGenerator(
+      verifiedClientIps.get(req) ?? req.ip ?? req.socket.remoteAddress ?? "",
+    );
   const activationLimiter = rateLimit({
+    keyGenerator: customerRateKey,
     windowMs: 10 * 60 * 1000,
     limit: 20,
     standardHeaders: true,
     legacyHeaders: false,
   });
   const orderLimiter = rateLimit({
+    keyGenerator: customerRateKey,
     windowMs: 60 * 1000,
     limit: 30,
     standardHeaders: true,

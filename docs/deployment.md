@@ -8,39 +8,47 @@ Current official references: [Vercel Hobby/plan behavior](https://vercel.com/doc
 
 ```text
 Vercel HTTPS frontend
-  -> Render HTTPS REST API
-  -> Render WSS Socket.IO
+  -> Vercel /api/customer/* -> Render HTTPS customer REST API
+  -> Render HTTPS staff REST API
+  -> Render WSS staff Socket.IO
 Render -> Neon pooled TLS PostgreSQL
 Render -> Cloudinary signed image upload
 Browser -> Cloudinary HTTPS delivery
 ```
 
-The generated Vercel and Render domains are different sites. Production cookies therefore use `Secure; HttpOnly; SameSite=None`, exact credentialed CORS, and origin validation. This design must pass real-browser third-party-cookie testing before acceptance.
+The QR menu uses relative `/api/customer/*` URLs. A Vercel Node.js Route Handler forwards approved customer REST routes to Express. It relays the host-only customer cookie as `Secure; HttpOnly; SameSite=Lax; Path=/api/customer` and forwards only that cookie to Render. Express still authenticates the session and scopes orders to the restaurant and customer session. Logout revokes the session on Render and removes the frontend cookie. Staff traffic retains its direct Render configuration with exact credentialed CORS and origin validation.
+
+The proxy checks the exact web origin on writes, disables caching, contains upstream redirects, and passes the order idempotency key through. Render accepts Vercel's client IP for customer rate limiting only when the proxy presents the shared server-side secret. Express retains its database-backed activation lockout and normal rate limits.
+
+Customer order status polls every 15 seconds while the menu page is active and refetches on focus and reconnect. Customer sockets are disabled in the running API. Staff and kitchen Socket.IO traffic continues directly to Render. Render Free can take about a minute to wake. The proxy uses a 75-second upstream deadline and a 90-second Function duration, which requires Fluid Compute on Vercel Hobby. A timeout may leave the outcome of a write uncertain. Retry orders with the same idempotency key. A customer coming from the previous deployment may need to activate again because the old cookie belongs to Render.
 
 ## Environment matrix
 
-| Variable                 | Location/class               | Secret                  | Production value/meaning                             |
-| ------------------------ | ---------------------------- | ----------------------- | ---------------------------------------------------- |
-| `NEXT_PUBLIC_API_URL`    | Vercel build/public          | No                      | Actual Render HTTPS origin, no trailing path         |
-| `NODE_ENV`               | Render runtime               | No                      | `production`                                         |
-| `PORT`                   | Render runtime               | No                      | Provider-managed; do not hardcode                    |
-| `HOST`                   | Render runtime               | No                      | `0.0.0.0`                                            |
-| `LOG_LEVEL`              | Render runtime               | No                      | `info`                                               |
-| `CORS_ORIGINS`           | Render runtime               | No                      | Exact actual Vercel HTTPS origin(s), comma-separated |
-| `PUBLIC_WEB_ORIGIN`      | Render runtime               | No                      | Actual Vercel HTTPS origin used in QR links          |
-| `DATABASE_URL`           | Render database              | Yes                     | Neon pooled TLS URL (`-pooler` hostname)             |
-| `DIRECT_URL`             | Migration environment only   | Yes                     | Neon direct TLS URL (no `-pooler`)                   |
-| `SESSION_TTL_HOURS`      | Render runtime               | No                      | Default `12` unless deliberately changed             |
-| `LOGIN_RATE_LIMIT_MAX`   | Render runtime               | No                      | Default `5`                                          |
-| `COOKIE_SAME_SITE`       | Render runtime               | No                      | `none`                                               |
-| `TRUST_PROXY_HOPS`       | Render runtime               | No                      | `1`                                                  |
-| `IMAGE_STORAGE_PROVIDER` | Render runtime               | No                      | `cloudinary`                                         |
-| `CLOUDINARY_CLOUD_NAME`  | Render image storage         | Treat as private config | Cloudinary product environment name                  |
-| `CLOUDINARY_API_KEY`     | Render image storage         | Yes                     | Backend-only key                                     |
-| `CLOUDINARY_API_SECRET`  | Render image storage         | Yes                     | Backend-only secret                                  |
-| `CLOUDINARY_FOLDER`      | Render image storage         | No                      | `restroflow/menu`                                    |
-| `MENU_IMAGE_DIRECTORY`   | Local development only       | No                      | `uploads/menu`; unused with Cloudinary               |
-| `DEMO_SEED_*`            | One-time approved seed shell | Yes/mixed               | Never API runtime or Vercel variables                |
+| Variable                 | Location/class               | Secret                  | Production value/meaning                                    |
+| ------------------------ | ---------------------------- | ----------------------- | ----------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL`    | Vercel build/public          | No                      | Actual Render HTTPS origin, no trailing path                |
+| `CUSTOMER_API_ORIGIN`    | Vercel runtime               | No                      | Exact Render HTTPS origin without trailing slash            |
+| `CUSTOMER_WEB_ORIGIN`    | Vercel runtime               | No                      | Exact Vercel HTTPS origin without trailing slash            |
+| `CUSTOMER_PROXY_SECRET`  | Vercel and Render runtime    | Yes                     | Same 32 random bytes encoded as 64 lowercase hex characters |
+| `NODE_ENV`               | Render runtime               | No                      | `production`                                                |
+| `PORT`                   | Render runtime               | No                      | Provider-managed; do not hardcode                           |
+| `HOST`                   | Render runtime               | No                      | `0.0.0.0`                                                   |
+| `LOG_LEVEL`              | Render runtime               | No                      | `info`                                                      |
+| `CORS_ORIGINS`           | Render runtime               | No                      | Exact actual Vercel HTTPS origin(s), comma-separated        |
+| `PUBLIC_WEB_ORIGIN`      | Render runtime               | No                      | Actual Vercel HTTPS origin used in QR links                 |
+| `DATABASE_URL`           | Render database              | Yes                     | Neon pooled TLS URL (`-pooler` hostname)                    |
+| `DIRECT_URL`             | Migration environment only   | Yes                     | Neon direct TLS URL (no `-pooler`)                          |
+| `SESSION_TTL_HOURS`      | Render runtime               | No                      | Default `12` unless deliberately changed                    |
+| `LOGIN_RATE_LIMIT_MAX`   | Render runtime               | No                      | Default `5`                                                 |
+| `COOKIE_SAME_SITE`       | Render runtime               | No                      | `none`                                                      |
+| `TRUST_PROXY_HOPS`       | Render runtime               | No                      | `1`                                                         |
+| `IMAGE_STORAGE_PROVIDER` | Render runtime               | No                      | `cloudinary`                                                |
+| `CLOUDINARY_CLOUD_NAME`  | Render image storage         | Treat as private config | Cloudinary product environment name                         |
+| `CLOUDINARY_API_KEY`     | Render image storage         | Yes                     | Backend-only key                                            |
+| `CLOUDINARY_API_SECRET`  | Render image storage         | Yes                     | Backend-only secret                                         |
+| `CLOUDINARY_FOLDER`      | Render image storage         | No                      | `restroflow/menu`                                           |
+| `MENU_IMAGE_DIRECTORY`   | Local development only       | No                      | `uploads/menu`; unused with Cloudinary                      |
+| `DEMO_SEED_*`            | One-time approved seed shell | Yes/mixed               | Never API runtime or Vercel variables                       |
 
 Never paste secrets into documentation, screenshots, Git, `NEXT_PUBLIC_*`, or provider build logs.
 
@@ -56,10 +64,21 @@ Prerequisite gate: approve connecting the GitHub and Vercel accounts. Then impor
 - Install command: default `npm install`/lockfile-aware workspace install; do not install only `apps/web` dependencies.
 - Build command: `npm run build` (also recorded in `apps/web/vercel.json`).
 - Output: framework default `.next`; do not override.
-- Environment: only `NEXT_PUBLIC_API_URL=https://<actual-render-service>.onrender.com` after the Render URL exists.
+- Set the Vercel variables in the environment matrix after the Render URL exists. Keep `CUSTOMER_PROXY_SECRET` server-only, enable Fluid Compute, and expose Vercel's system environment variables so the handler can recognize the hosted environment. Preview environments need their own exact origin and isolated backend to exercise customer writes.
 - Git auto-deploy: leave disabled until the separate Git/deployment approval. Preview deployments also require their exact origins in Render CORS if they need authenticated API access.
 
 Do not add `DATABASE_URL`, Cloudinary secrets, seed passwords, or session material to Vercel.
+
+## Render-first customer proxy release gate
+
+Set `CUSTOMER_PROXY_SECRET` on Render before deploying the new backend. The new production API fails startup if the secret is missing or malformed. The currently deployed backend keeps its existing behavior until the new backend is deployed.
+
+1. After rollout approval, provision 32 cryptographically random bytes as 64 lowercase hex characters. Set the same server-only `CUSTOMER_PROXY_SECRET` in Render and Vercel. Keep it out of source control and all `NEXT_PUBLIC_*` variables.
+2. Deploy the new backend to Render first. Verify readiness, direct public menu access, rejection of invalid proxy credentials, and separate rate limits for authenticated proxy clients. Direct customer requests without proxy metadata retain their existing access policy and limits. The previous frontend can still call public REST endpoints and poll order status.
+3. Release the Vercel frontend with `CUSTOMER_API_ORIGIN=https://restroflow-api.onrender.com` and `CUSTOMER_WEB_ORIGIN=https://restroflow-joyel.vercel.app`, plus the matching secret. The 90-second Function duration requires Fluid Compute on Hobby. The upstream deadline is 75 seconds.
+4. Verify first-party cookie persistence and ordering with approved test data. A passing preview build verifies compilation. An isolated preview that exercises authentication needs its own exact frontend origin and backend.
+
+If Vercel auto-deploys its production branch, merging can release the frontend before Render is ready. Complete the Render gate before merging or releasing the frontend. Branch pushes can also trigger automatic Vercel previews.
 
 ## Render Free settings
 

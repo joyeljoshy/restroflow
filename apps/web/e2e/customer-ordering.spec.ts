@@ -113,7 +113,11 @@ function order() {
   };
 }
 
-async function mockCustomerApi(page: Page, failFirstSubmission = false) {
+async function mockCustomerApi(
+  page: Page,
+  failFirstSubmission = false,
+  rejectSession = false,
+) {
   let activated = false;
   let created = false;
   let failed = false;
@@ -127,7 +131,7 @@ async function mockCustomerApi(page: Page, failFirstSubmission = false) {
       401,
     ),
   );
-  await page.route("**/api/v1/public/**", async (route) => {
+  await page.route("**/api/customer/**", async (route) => {
     if (route.request().method() === "OPTIONS") {
       await route.fulfill({ status: 204, headers: corsHeaders });
       return;
@@ -143,7 +147,7 @@ async function mockCustomerApi(page: Page, failFirstSubmission = false) {
       return;
     }
     if (path.endsWith("/customer-session") && request.method() === "GET") {
-      if (activated)
+      if (activated && !rejectSession)
         await json(route, {
           session: {
             id: "a0000000-0000-4000-8000-000000000001",
@@ -244,7 +248,7 @@ test("customer page notices when staff opens the table session", async ({
       401,
     ),
   );
-  await page.route("**/api/v1/public/**", async (route) => {
+  await page.route("**/api/customer/**", async (route) => {
     const request = route.request();
     if (request.method() === "OPTIONS") {
       await route.fulfill({ status: 204, headers: corsHeaders });
@@ -291,7 +295,7 @@ test("customer page notices when staff opens the table session", async ({
   ).toBeVisible({ timeout: 10_000 });
 });
 
-async function addItemAndActivate(page: Page) {
+async function addItemAndActivate(page: Page, reopenCart = true) {
   await page.goto(`/menu/table/${identifier}`);
   await expect(
     page.getByRole("heading", { name: "Emerald Kitchen" }),
@@ -304,8 +308,25 @@ async function addItemAndActivate(page: Page) {
   await page.getByRole("button", { name: "Activate & submit" }).click();
   await page.getByLabel("6-digit activation code").fill("123456");
   await page.getByRole("button", { name: "Activate ordering" }).click();
-  await page.getByRole("button", { name: /View cart/ }).click();
+  if (reopenCart) await page.getByRole("button", { name: /View cart/ }).click();
 }
+
+test("accepted activation with a missing session keeps the cart and explains the failure", async ({
+  page,
+}) => {
+  await mockCustomerApi(page, false, true);
+  await addItemAndActivate(page, false);
+  const dialog = page.getByRole("dialog", { name: "Activate ordering" });
+  await expect(dialog.getByRole("alert")).toContainText(
+    "The code was accepted, but ordering access could not be verified",
+  );
+  await expect(
+    dialog.getByRole("button", { name: "Activate ordering" }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Cart (1)", exact: true }),
+  ).toBeAttached();
+});
 
 test("customer browses, activates, submits, and reloads order tracking", async ({
   page,

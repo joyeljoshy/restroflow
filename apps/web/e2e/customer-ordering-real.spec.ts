@@ -3,6 +3,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 
 import { expect, request, test } from "@playwright/test";
 import pino from "pino";
+import { io } from "socket.io-client";
 
 import "../../api/src/types/express.d.ts";
 
@@ -38,6 +39,7 @@ import { PrismaTableRepository } from "../../api/src/modules/tables/table.reposi
 import { TableService } from "../../api/src/modules/tables/table.service.js";
 
 import {
+  localCustomerProxySecret,
   requireLoopbackApiUrl,
   restrictLiveApiRequests,
 } from "./isolated-live-api";
@@ -48,8 +50,7 @@ const databaseUrl =
     : undefined;
 const liveApiUrl = process.env.REAL_CUSTOMER_API_URL ?? "http://localhost:4000";
 const liveApi = requireLoopbackApiUrl(liveApiUrl);
-const liveWeb = new URL(liveApi.origin);
-liveWeb.port = "3100";
+const liveWeb = new URL("http://127.0.0.1:3100");
 const liveApiPort = Number(
   liveApi.port || (liveApi.protocol === "https:" ? 443 : 80),
 );
@@ -131,6 +132,7 @@ test.describe("live customer browser to kitchen flow", () => {
       authService,
       cookieOptions,
       customerService,
+      customerProxySecret: localCustomerProxySecret,
       customerCookieOptions: cookieOptions,
       healthRepository: new PrismaHealthRepository(prisma),
       loginRateLimitMax: 50,
@@ -160,10 +162,9 @@ test.describe("live customer browser to kitchen flow", () => {
     const realtime = createRealtimeServer(server, {
       allowedOrigins: ["http://localhost:3100", "http://127.0.0.1:3100"],
       authService,
-      customerService,
       revalidateIntervalMs: 100,
     });
-    publisher.attach(realtime, authService, customerService);
+    publisher.attach(realtime, authService);
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(liveApiPort, () => resolve());
@@ -217,7 +218,9 @@ test.describe("live customer browser to kitchen flow", () => {
 
   test("completes a real restaurant journey from setup through analytics", async ({
     page,
+    browser,
   }) => {
+    test.setTimeout(60_000);
     const staff = await request.newContext({
       baseURL: liveApiUrl,
       extraHTTPHeaders: { origin: liveWeb.origin },
@@ -290,12 +293,91 @@ test.describe("live customer browser to kitchen flow", () => {
     await page
       .getByLabel("6-digit activation code")
       .fill(issuedBody.activation.activationCode);
+    const activationResponse = page.waitForResponse((response) =>
+      response.url().endsWith("/api/customer/table-access/activate"),
+    );
     await page.getByRole("button", { name: "Activate ordering" }).click();
-    await page.getByRole("button", { name: /View cart/ }).click();
-    await page.getByRole("button", { name: "Submit order" }).click();
+    const activated = await activationResponse;
+    expect(activated.status()).toBe(201);
+    const cookieAttributes = (
+      await activated.headerValues("set-cookie")
+    ).flatMap((header) =>
+      header
+        .split(";")
+        .slice(1)
+        .map((part) => part.trim()),
+    );
+    expect(cookieAttributes).toEqual(
+      expect.arrayContaining([
+        "SameSite=Lax",
+        "HttpOnly",
+        "Path=/api/customer",
+      ]),
+    );
     await expect(
-      page.getByRole("heading", { name: "Order confirmed" }),
-    ).toBeVisible();
+      page.getByRole("dialog", { name: "Activate ordering" }),
+    ).toBeHidden();
+    const sessionUrl = new URL("/api/customer/customer-session", liveWeb).href;
+    expect((await page.request.get(sessionUrl)).status()).toBe(200);
+    const cookies = await page.context().cookies(sessionUrl);
+    const customerCookie = cookies.find(
+      (cookie) => cookie.name === "restroflow_customer_session",
+    );
+    expect(
+      customerCookie && {
+        domain: customerCookie.domain,
+        path: customerCookie.path,
+        httpOnly: customerCookie.httpOnly,
+      },
+    ).toEqual({
+      domain: liveWeb.hostname,
+      path: "/api/customer",
+      httpOnly: true,
+    });
+    const staffCookie = (await staff.storageState()).cookies.find(
+      (cookie) => cookie.name === "restroflow_session",
+    );
+    if (!staffCookie) throw new Error("Staff login did not return a session");
+    const kitchen = io(liveApi.origin, {
+      auth: { restaurantId },
+      extraHeaders: {
+        origin: liveWeb.origin,
+        cookie: `${staffCookie.name}=${staffCookie.value}`,
+      },
+      transports: ["websocket"],
+      timeout: 5_000,
+    });
+    let kitchenOrderId: string | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        kitchen.once("connect_error", reject);
+        kitchen.once("connect", () => {
+          kitchen
+            .timeout(5_000)
+            .emit(
+              "realtime:subscribe",
+              { channel: "kitchen" },
+              (error: Error | null, result?: { ok: boolean }) => {
+                if (error) reject(error);
+                else if (!result?.ok)
+                  reject(new Error("KDS subscription failed"));
+                else resolve();
+              },
+            );
+        });
+      });
+      kitchen.once("order:changed", (event: { orderId: string }) => {
+        kitchenOrderId = event.orderId;
+      });
+      await page.getByRole("button", { name: /View cart/ }).click();
+      await page.getByRole("button", { name: "Submit order" }).click();
+      await expect(
+        page.getByRole("heading", { name: "Order confirmed" }),
+      ).toBeVisible();
+      await expect.poll(() => kitchenOrderId).toBeTruthy();
+    } finally {
+      kitchen.disconnect();
+    }
 
     const stored = await prisma.order.findFirstOrThrow({
       where: { restaurantId, source: "CUSTOMER" },
@@ -303,10 +385,44 @@ test.describe("live customer browser to kitchen flow", () => {
     });
     expect(stored.totalMinor).toBe(12_500);
     expect(stored.items[0]?.itemNameSnapshot).toBe("Live Paneer Plate");
+    expect(kitchenOrderId).toBe(stored.id);
 
     await page.getByRole("button", { name: "Track order" }).click();
     await expect(page.getByText("Sent to the restaurant")).toBeVisible();
-    await expect(page.getByText("Live", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Updates about every 15 seconds"),
+    ).toBeVisible();
+    const guest = await browser.newContext();
+    try {
+      const outsider = await guest.request.get(
+        new URL(`/api/customer/orders/${stored.id}`, liveWeb).href,
+      );
+      expect(outsider.status()).toBe(401);
+      const secondIssuance = await staff.post(
+        `/api/v1/table-sessions/${tableSessionId}/customer-access`,
+        { headers: { "x-restaurant-id": restaurantId } },
+      );
+      expect(secondIssuance.status()).toBe(201);
+      const second = (await secondIssuance.json()) as typeof issuedBody;
+      const secondActivation = await guest.request.post(
+        new URL("/api/customer/table-access/activate", liveWeb).href,
+        {
+          headers: { origin: liveWeb.origin },
+          data: {
+            identifier,
+            activationCode: second.activation.activationCode,
+          },
+        },
+      );
+      expect(secondActivation.status()).toBe(201);
+      expect((await guest.request.get(sessionUrl)).status()).toBe(200);
+      const otherCustomer = await guest.request.get(
+        new URL(`/api/customer/orders/${stored.id}`, liveWeb).href,
+      );
+      expect(otherCustomer.status()).toBe(404);
+    } finally {
+      await guest.close();
+    }
     const accepted = await staff.patch(
       `/api/v1/kitchen/orders/${stored.id}/status`,
       {
@@ -329,7 +445,22 @@ test.describe("live customer browser to kitchen flow", () => {
       },
     );
     expect(preparing.ok()).toBe(true);
+    await expect(page.getByText("Your food is being prepared")).toBeVisible({
+      timeout: 20_000,
+    });
+    await page.reload();
+    expect((await page.request.get(sessionUrl)).status()).toBe(200);
     await expect(page.getByText("Your food is being prepared")).toBeVisible();
+    expect((customerCookie?.expires ?? 0) > Date.now() / 1_000).toBe(true);
+    const reopened = await page.context().newPage();
+    try {
+      await reopened.goto(new URL(`/menu/table/${identifier}`, liveWeb).href);
+      await expect(
+        reopened.getByText("Your food is being prepared"),
+      ).toBeVisible();
+    } finally {
+      await reopened.close();
+    }
 
     const preparingBody = (await preparing.json()) as {
       order: { version: number };
@@ -353,6 +484,22 @@ test.describe("live customer browser to kitchen flow", () => {
       data: { version: readyBody.order.version, status: "SERVED" },
     });
     expect(served.ok()).toBe(true);
+    const logout = await page.request.post(
+      new URL("/api/customer/customer-session/logout", liveWeb).href,
+      { headers: { origin: liveWeb.origin } },
+    );
+    expect(logout.status()).toBe(204);
+    expect(
+      (await page.context().cookies(sessionUrl)).some(
+        (cookie) => cookie.name === "restroflow_customer_session",
+      ),
+    ).toBe(false);
+    expect((await page.request.get(sessionUrl)).status()).toBe(401);
+    expect(
+      await prisma.customerOrderingSession.count({
+        where: { tableSessionId, revokedAt: { not: null } },
+      }),
+    ).toBe(1);
 
     const finalized = await staff.post(
       `/api/v1/table-sessions/${tableSessionId}/bills`,

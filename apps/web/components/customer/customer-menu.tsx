@@ -1,11 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import {
-  customerOrderChangedEventSchema,
-  type CustomerOrder,
-  type PublicMenuItem,
-} from "@restroflow/contracts";
+import type { CustomerOrder, PublicMenuItem } from "@restroflow/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -19,13 +15,10 @@ import {
   ShoppingBag,
   Trash2,
   UtensilsCrossed,
-  Wifi,
-  WifiOff,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
-import { io } from "socket.io-client";
 import { z } from "zod";
 
 import { MenuItemImage } from "@/components/menu/menu-item-image";
@@ -36,7 +29,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { ApiError, apiUrl } from "@/lib/auth-api";
+import { ApiError } from "@/lib/auth-api";
 import {
   activateCustomerSession,
   createCustomerOrder,
@@ -252,32 +245,59 @@ function ActivationDialog({
   const {
     register,
     handleSubmit,
+    reset,
     formState: { errors },
   } = useForm<{ activationCode: string }>({
     resolver: zodResolver(activationSchema),
   });
   const activation = useMutation({
-    mutationFn: (code: string) => activateCustomerSession(identifier, code),
+    retry: false,
+    mutationFn: async (code: string) => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ["customer-session"] }),
+        queryClient.cancelQueries({ queryKey: ["customer-orders"] }),
+      ]);
+      await activateCustomerSession(identifier, code);
+      try {
+        return await fetchCustomerSession();
+      } catch {
+        throw new ApiError(
+          "The code was accepted, but ordering access could not be verified. Try refreshing before asking staff for a new code.",
+          503,
+          "CUSTOMER_SESSION_UNVERIFIED",
+        );
+      }
+    },
     onSuccess: (session) => {
+      reset();
       queryClient.setQueryData(["customer-session"], session);
       queryClient.setQueryData(["customer-orders"], []);
-      void queryClient.invalidateQueries({ queryKey: ["customer-orders"] });
       onClose();
     },
   });
+  const verificationFailed =
+    activation.error instanceof ApiError &&
+    activation.error.code === "CUSTOMER_SESSION_UNVERIFIED";
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={() => {
+        if (!activation.isPending) {
+          activation.reset();
+          reset();
+          onClose();
+        }
+      }}
       title="Activate ordering"
       description="Ask your server for the short-lived code for this table."
     >
       <form
         className="space-y-4 p-5 sm:p-6"
         onSubmit={(event) =>
-          void handleSubmit((value) => activation.mutate(value.activationCode))(
-            event,
-          )
+          void handleSubmit((value) => {
+            if (!activation.isPending && !verificationFailed)
+              activation.mutate(value.activationCode);
+          })(event)
         }
         noValidate
       >
@@ -304,7 +324,10 @@ function ActivationDialog({
             {errorText(activation.error, "The code could not be verified.")}
           </p>
         )}
-        <Button className="min-h-12 w-full" disabled={activation.isPending}>
+        <Button
+          className="min-h-12 w-full"
+          disabled={activation.isPending || verificationFailed}
+        >
           {activation.isPending && (
             <LoaderCircle className="size-4 animate-spin" />
           )}
@@ -327,9 +350,6 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
   const [cartOpen, setCartOpen] = useState(false);
   const [activationOpen, setActivationOpen] = useState(false);
   const [confirmed, setConfirmed] = useState<CustomerOrder | null>(null);
-  const [connection, setConnection] = useState<
-    "offline" | "connecting" | "connected"
-  >("offline");
   const submissionKey = useRef<string | null>(null);
 
   useEffect(() => ensureScope(identifier), [ensureScope, identifier]);
@@ -340,7 +360,9 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
   });
   const session = useQuery({
     queryKey: ["customer-session"],
-    queryFn: fetchCustomerSession,
+    queryFn: ({ signal }) => fetchCustomerSession(signal),
+    enabled: !activationOpen,
+    staleTime: 5_000,
     retry: false,
   });
   const tableContext = useQuery({
@@ -350,70 +372,26 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
   });
   const orders = useQuery({
     queryKey: ["customer-orders"],
-    queryFn: fetchCustomerOrders,
-    enabled: Boolean(session.data),
-    refetchInterval: connection === "connected" ? 60_000 : 15_000,
+    queryFn: ({ signal }) => fetchCustomerOrders(signal),
+    enabled: (query) =>
+      Boolean(session.data) &&
+      !session.isError &&
+      !activationOpen &&
+      !(
+        query.state.error instanceof ApiError &&
+        query.state.error.status === 401
+      ),
+    retry: (count, error) =>
+      count < 2 && !(error instanceof ApiError && error.status === 401),
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
   const sessionInvalid =
-    orders.error instanceof ApiError && orders.error.status === 401;
-
-  const orderIds = useMemo(
-    () =>
-      (orders.data ?? [])
-        .map((order) => order.id)
-        .sort()
-        .join(","),
-    [orders.data],
-  );
-  useEffect(() => {
-    if (!session.data || sessionInvalid) return;
-    const socket = io(apiUrl, {
-      withCredentials: true,
-      auth: { audience: "customer" },
-      transports: ["websocket", "polling"],
-      reconnection: true,
-    });
-    const seen = new Set<string>();
-    const versions = new Map<string, number>();
-    const reconcile = () =>
-      void queryClient.invalidateQueries({ queryKey: ["customer-orders"] });
-    socket.on("connect", () => {
-      const ids = orderIds.split(",").filter(Boolean);
-      if (ids.length === 0) {
-        setConnection("connected");
-        reconcile();
-        return;
-      }
-      setConnection("connecting");
-      let pending = ids.length;
-      for (const orderId of ids)
-        socket.emit("customer:subscribe", { orderId }, () => {
-          pending -= 1;
-          if (pending === 0) {
-            setConnection("connected");
-            reconcile();
-          }
-        });
-    });
-    socket.on("disconnect", () => setConnection("connecting"));
-    socket.on("connect_error", () => setConnection("connecting"));
-    socket.io.on("reconnect_attempt", () => setConnection("connecting"));
-    socket.on("customer:order-changed", (input: unknown) => {
-      const parsed = customerOrderChangedEventSchema.safeParse(input);
-      if (!parsed.success || seen.has(parsed.data.eventId)) return;
-      seen.add(parsed.data.eventId);
-      const latest = versions.get(parsed.data.orderId) ?? 0;
-      if (parsed.data.orderVersion < latest) return;
-      versions.set(parsed.data.orderId, parsed.data.orderVersion);
-      reconcile();
-    });
-    return () => {
-      socket.removeAllListeners();
-      socket.io.removeAllListeners();
-      socket.disconnect();
-      setConnection("offline");
-    };
-  }, [orderIds, queryClient, session.data, sessionInvalid]);
+    (orders.error instanceof ApiError && orders.error.status === 401) ||
+    (Boolean(session.data) &&
+      session.error instanceof ApiError &&
+      session.error.status === 401);
 
   const submitOrder = useMutation({
     mutationFn: () => {
@@ -563,7 +541,7 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
             role="alert"
           >
             <span>
-              Your ordering access has expired. Ask staff for a new code.
+              Ordering access could not be verified. Ask staff for a new code.
             </span>
             <Button
               size="sm"
@@ -656,12 +634,7 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
                 Your orders
               </h2>
               <span className="inline-flex items-center gap-1 text-xs font-bold text-stone-600">
-                {connection === "connected" ? (
-                  <Wifi className="size-3 text-emerald-700" />
-                ) : (
-                  <WifiOff className="size-3 text-amber-700" />
-                )}
-                {connection === "connected" ? "Live" : "Reconnecting"}
+                Updates about every 15 seconds
               </span>
             </div>
             <div className="mt-4 grid gap-4">
@@ -815,7 +788,8 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
                 className="min-h-12 w-full"
                 disabled={submitOrder.isPending || !hasActiveSession}
                 onClick={() => {
-                  if (session.data && !sessionInvalid) submitOrder.mutate();
+                  if (session.data && !session.isError && !sessionInvalid)
+                    submitOrder.mutate();
                   else {
                     setCartOpen(false);
                     setActivationOpen(true);
@@ -825,7 +799,9 @@ export function CustomerMenu({ identifier }: { identifier: string }) {
                 {submitOrder.isPending && (
                   <LoaderCircle className="size-4 animate-spin" />
                 )}
-                {session.data ? "Submit order" : "Activate & submit"}
+                {session.data && !session.isError && !sessionInvalid
+                  ? "Submit order"
+                  : "Activate & submit"}
               </Button>
             </>
           )}

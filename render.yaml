@@ -16,6 +16,8 @@ services:
         value: info
       - key: COOKIE_SAME_SITE
         value: none
+      - key: CUSTOMER_PROXY_SECRET
+        sync: false
       - key: TRUST_PROXY_HOPS
         value: 1
       - key: IMAGE_STORAGE_PROVIDER

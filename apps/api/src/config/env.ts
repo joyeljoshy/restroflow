@@ -25,6 +25,10 @@ const envSchema = z.object({
   SESSION_TTL_HOURS: z.coerce.number().int().positive().max(168).default(12),
   LOGIN_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(100).default(5),
   COOKIE_SAME_SITE: z.enum(["lax", "none"]).default("lax"),
+  CUSTOMER_PROXY_SECRET: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/, "Use 32 random bytes encoded as lowercase hex.")
+    .optional(),
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   IMAGE_STORAGE_PROVIDER: z.enum(["local", "cloudinary"]).default("local"),
   MENU_IMAGE_DIRECTORY: z.string().trim().min(1).default("uploads/menu"),
@@ -76,6 +80,11 @@ export function loadEnvironment(
     }
   }
   if (env.NODE_ENV === "production") {
+    if (!env.CUSTOMER_PROXY_SECRET) {
+      productionErrors.CUSTOMER_PROXY_SECRET = [
+        "Required for the production customer proxy.",
+      ];
+    }
     if (env.COOKIE_SAME_SITE !== "none") {
       productionErrors.COOKIE_SAME_SITE = [
         "The Vercel-to-Render deployment requires COOKIE_SAME_SITE=none.",

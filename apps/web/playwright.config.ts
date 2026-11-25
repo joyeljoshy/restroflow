@@ -8,5 +8,16 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: "html",
   use: { baseURL: "http://127.0.0.1:3100", trace: "on-first-retry" },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    ...(process.env.CUSTOMER_WEBKIT_E2E === "1"
+      ? [
+          {
+            name: "customer-webkit",
+            testMatch: /customer-ordering.*\.spec\.ts$/,
+            use: { ...devices["iPhone 13"] },
+          },
+        ]
+      : []),
+  ],
 });

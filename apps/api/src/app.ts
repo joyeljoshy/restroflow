@@ -52,6 +52,7 @@ type AppOptions = {
   billingService?: BillingServiceContract;
   analyticsService?: AnalyticsServiceContract;
   customerCookieOptions?: SessionCookieOptions;
+  customerProxySecret?: string;
   trustProxyHops?: number;
   version?: string;
 };
@@ -161,6 +162,7 @@ export function createApp(options: AppOptions) {
       options.allowedOrigins,
       billingController,
       analyticsController,
+      options.customerProxySecret,
     ),
   );
   app.use(notFoundHandler);
