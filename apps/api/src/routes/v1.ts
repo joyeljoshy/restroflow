@@ -40,6 +40,7 @@ export function createV1Router(
   allowedOrigins: string[] = [],
   billingController?: BillingController,
   analyticsController?: AnalyticsController,
+  customerProxySecret?: string,
 ): Router {
   const router = Router();
   router.use(
@@ -61,6 +62,7 @@ export function createV1Router(
         cookieOptions,
         customerCookieOptions,
         allowedOrigins,
+        customerProxySecret,
       ),
     );
   }

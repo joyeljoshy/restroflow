@@ -1,5 +1,7 @@
 import type { BrowserContext } from "@playwright/test";
 
+export const localCustomerProxySecret = "a".repeat(64);
+
 export function requireLoopbackApiUrl(value: string): URL {
   const url = URL.parse(value);
   if (

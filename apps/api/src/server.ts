@@ -105,6 +105,7 @@ const app = createApp({
   ),
   orderService,
   customerService,
+  customerProxySecret: env.CUSTOMER_PROXY_SECRET,
   billingService,
   analyticsService,
   customerCookieOptions: {
@@ -119,9 +120,8 @@ const server = createServer(app);
 const realtimeServer = createRealtimeServer(server, {
   allowedOrigins: env.CORS_ORIGINS,
   authService,
-  customerService,
 });
-realtimePublisher.attach(realtimeServer, authService, customerService);
+realtimePublisher.attach(realtimeServer, authService);
 
 server.listen(env.PORT, env.HOST, () => {
   logger.info({ host: env.HOST, port: env.PORT }, "RestroFlow API listening");
