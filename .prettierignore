@@ -1,6 +1,8 @@
 .next
+.restroflow-local/
 coverage
 dist
 node_modules
 apps/api/src/generated
+apps/web/public/restroflow-mark.svg
 package-lock.json

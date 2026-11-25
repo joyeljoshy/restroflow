@@ -8,11 +8,16 @@ import {
   ReceiptText,
   ShieldCheck,
 } from "lucide-react";
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import { Logo } from "@/components/brand/logo";
 import { SystemStatus } from "@/components/system-status";
 import { Button } from "@/components/ui/button";
+
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+};
 
 const capabilities = [
   {
@@ -36,7 +41,11 @@ export default function HomePage() {
   return (
     <main className="min-h-screen overflow-hidden">
       <header className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5 sm:px-8">
-        <Link href="/" aria-label="RestroFlow home">
+        <Link
+          href="/"
+          aria-label="RestroFlow home"
+          className="focus-visible:ring-ring rounded-xl focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+        >
           <Logo />
         </Link>
         <nav

@@ -6,13 +6,20 @@ import { LoginForm } from "@/components/auth/login-form";
 import { Logo } from "@/components/brand/logo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export const metadata: Metadata = { title: "Staff sign in" };
+export const metadata: Metadata = {
+  title: "Staff sign in",
+  robots: { index: false, follow: false, noarchive: true },
+};
 
 export default function LoginPage() {
   return (
     <main className="grid min-h-screen lg:grid-cols-[.85fr_1.15fr]">
       <section className="flex flex-col p-6 sm:p-10">
-        <Link href="/">
+        <Link
+          href="/"
+          aria-label="RestroFlow home"
+          className="focus-visible:ring-ring w-fit rounded-xl focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+        >
           <Logo />
         </Link>
         <div className="mx-auto flex w-full max-w-md flex-1 items-center py-12">
