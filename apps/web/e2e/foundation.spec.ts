@@ -10,6 +10,47 @@ test("landing page exposes the primary navigation", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("product demo loads from the keyboard and shares with the clipboard fallback", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "share", {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (value: string) => {
+          window.localStorage.setItem("shared-video-url", value);
+          return Promise.resolve();
+        },
+      },
+    });
+  });
+  await page.goto("/");
+
+  const playButton = page.getByRole("button", {
+    name: /play restroflow product demonstration/i,
+  });
+  await playButton.focus();
+  await expect(playButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByTitle("RestroFlow restaurant management product demonstration"),
+  ).toHaveAttribute("src", /youtube-nocookie\.com\/embed\/uYCQo1ge99o/);
+
+  await page.getByRole("button", { name: /share video/i }).click();
+  await expect(page.getByRole("status").last()).toHaveText(
+    "Video link copied to your clipboard.",
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.localStorage.getItem("shared-video-url")),
+    )
+    .toBe("https://youtu.be/uYCQo1ge99o");
+});
+
 test("protected workspaces redirect anonymous staff to login", async ({
   page,
 }) => {
