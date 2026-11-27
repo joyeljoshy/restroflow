@@ -12,6 +12,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import { Logo } from "@/components/brand/logo";
+import { YouTubeDemo } from "@/components/marketing/youtube-demo";
 import { SystemStatus } from "@/components/system-status";
 import { Button } from "@/components/ui/button";
 
@@ -194,6 +195,8 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      <YouTubeDemo />
 
       <section className="mx-auto max-w-7xl px-5 py-20 sm:px-8">
         <div className="bg-card grid gap-6 rounded-2xl border p-7 sm:p-10 lg:grid-cols-[1fr_auto] lg:items-center">
